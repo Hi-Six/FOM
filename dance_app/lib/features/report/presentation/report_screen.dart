@@ -129,8 +129,7 @@ class _RadarChartCard extends StatelessWidget {
                   fontWeight: FontWeight.w600,
                 ),
                 getTitle: (index, _) {
-                  const labels = ['가동범위', '파워', '리듬', '아이솔', '창의성'];
-                  return RadarChartTitle(text: labels[index]);
+                  return RadarChartTitle(text: radar.axes[index].label);
                 },
                 dataSets: [
                   RadarDataSet(
@@ -139,11 +138,8 @@ class _RadarChartCard extends StatelessWidget {
                     borderWidth: 2,
                     entryRadius: 4,
                     dataEntries: [
-                      RadarEntry(value: radar.rom * 100),
-                      RadarEntry(value: radar.power * 100),
-                      RadarEntry(value: radar.rhythm * 100),
-                      RadarEntry(value: radar.isolation * 100),
-                      RadarEntry(value: radar.creativity * 100),
+                      for (final axis in radar.axes)
+                        RadarEntry(value: axis.value * 100),
                     ],
                   ),
                 ],
@@ -157,11 +153,8 @@ class _RadarChartCard extends StatelessWidget {
             spacing: 16,
             runSpacing: 8,
             children: [
-              _LegendItem(label: '가동범위', value: radar.rom),
-              _LegendItem(label: '파워', value: radar.power),
-              _LegendItem(label: '리듬', value: radar.rhythm),
-              _LegendItem(label: '아이솔', value: radar.isolation),
-              _LegendItem(label: '창의성', value: radar.creativity),
+              for (final axis in radar.axes)
+                _LegendItem(label: axis.label, value: axis.value),
             ],
           ),
         ],

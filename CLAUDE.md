@@ -1,60 +1,58 @@
 # Role
-You are an expert Flutter Developer and UI/UX Specialist. Your task is to scaffold and implement the frontend of an MVP app based on the provided specifications. 
+You are an expert Python Backend Developer and Computer Vision Engineer. Your task is to build the core Video Data Extraction Module for a Street Dance Analysis MVP.
 
 # Project Context
-- **Project:** AI-based Street Dance Level Judgment & Career Guide Platform (MVP).
-- **Target Audience:** Teenagers (10s) who are highly sensitive to peer evaluation and need clear career direction. 
-- **Core Value:** Providing a private, safe environment for dance practice, objective AI analysis, and customized career roadmaps (e.g., backup dancer, choreographer) without human intervention.
-- **Vibe & Design System:** TikTok/Reels style. Fast-paced, intuitive UI. Default **Dark Mode** with vibrant **Neon accents** (e.g., Neon Green, Cyberpunk Purple) to fit the street dance culture.
+- **Domain:** AI Street Dance Level Judgment Platform.
+- **Architecture:** We have 6 separate scoring functions (ROM, Power, Isolation, Rhythm, Creativity, Accuracy) that will be developed by different team members. 
+- **Goal:** To prevent server overload and ensure parallel development, you must build **ONE common extraction module**. This module will process an uploaded video once, extract the 3D landmarks, clean the data, normalize it, and return a standardized JSON array. This JSON will then be passed as an argument to the 6 scoring functions.
 
-# Constraints & Tech Stack
-- **Framework:** Flutter (Latest version).
-- **Authentication:** NO Auth (Skip login/signup completely for this 1-week MVP).
-- **State Management:** Riverpod (or your recommended modern state management).
-- **Routing:** go_router.
-- **Key Packages to use:** `image_picker` (for gallery/camera), `video_player` (for playback & overlay), `fl_chart` (for radar charts), `lottie` (for loading animations).
-- **Data Layer:** The app will eventually connect to a backend (e.g., FastAPI or Spring Boot). For now, implement **Mock Repositories** with simulated network delays (`Future.delayed`) returning dummy JSON data so the UI can be fully tested. Local data passing between screens should use simple state management or `shared_preferences`.
+# Tech Stack & Constraints
+- Python 3.9+
+- `opencv-python` (cv2) for video processing.
+- `mediapipe` (Pose solution) for 3D landmark extraction.
+- `numpy`, `pandas`, `scipy` for mathematical operations, data smoothing, and interpolation.
+- **Performance:** This is an MVP. Optimize for speed. If YOLO11 integration for bounding box tracking is too complex for a 1-week MVP, skip it and rely entirely on `mediapipe` with strict data smoothing.
 
-# App Structure & Navigation
-Use a single `BottomNavigationBar` with 3 main tabs:
-1. **Home (Challenge):** Explore reference videos.
-2. **Studio (Action):** Upload/Shoot videos.
-3. **Report (Result):** AI Feedback & Career Guide.
+# Pipeline Requirements (Crucial)
+You must implement a class or function (e.g., `extract_dance_data(video_path)`) that strictly follows these 4 steps:
 
-# Screen Specifications (Total 5 Screens)
+1. **Meta Data Extraction:**
+   - Extract and store the `fps` (Frames Per Second) and `total_frames` using OpenCV. This is strictly required for the 'Rhythm' and 'Accuracy' scoring modules to align time.
 
-## 1. Home Screen (Tab 1)
-- **Layout:** Vertical scrolling list of dance reference videos (e.g., Popping Basics, Breaking Intro).
-- **UI Elements:** Large video thumbnails, track title, and difficulty badge.
-- **Action:** Tapping a thumbnail opens a bottom sheet or modal previewing the video with a prominent "Start Challenge" button that navigates to the Studio Screen.
+2. **Raw Landmark Extraction:**
+   - Run MediaPipe Pose on every frame.
+   - Extract `x`, `y`, `z`, and `visibility` for all 33 landmarks.
 
-## 2. Studio Screen (Tab 2)
-- **Layout:** Split view or overlay. Top: small looping reference video. Bottom/Main: User's camera preview or upload UI.
-- **Action:** Provide two clear buttons using `image_picker`: "Upload from Gallery" and "Shoot Video". 
-- **Flow:** Once a video is selected, navigate immediately to the Loading Screen.
+3. **Data Smoothing & Interpolation (Mandatory):**
+   - Dance videos have fast motions, causing MediaPipe to temporarily lose track or coordinates to jitter.
+   - Use `pandas` `.interpolate(method='linear')` to fill missing frames (NaN values).
+   - Apply a Moving Average filter (e.g., `rolling(window=3).mean()`) to remove high-frequency jitter. If this is skipped, the 'Power' (acceleration) scoring function will break.
 
-## 3. Loading Screen
-- **Purpose:** Keep teenagers engaged while waiting for AI Vision and LLM processing.
-- **UI Elements:** A cool dancing skeleton Lottie animation in the center. Dynamic text that changes every 2 seconds (e.g., "Analyzing joint movements...", "Calculating rhythm accuracy...", "Generating career roadmap...").
+4. **Normalization (Crucial for Accuracy Scoring):**
+   - The 'Accuracy' module compares users with reference dancers of different body proportions. You must apply a 2-step normalization to eliminate body scale and position differences:
+   - **Step A (Translation):** Calculate the 'Mid-Hip' (average of left_hip and right_hip). Shift all 33 coordinates so Mid-Hip becomes `(0,0,0)`.
+   - **Step B (Scaling):** Calculate the 'Torso Length' (distance between Mid-Shoulder and Mid-Hip). Divide all translated coordinates by this Torso Length.
+   - Create a `normalized_landmarks` dictionary with these final values. This ensures coordinates represent relative body proportions, unaffected by actual height or camera distance.
 
-## 4. Feedback Screen (Navigated automatically after Loading)
-- **Layout:** Focus on action correction. 
-- **UI Elements:**
-  - Main area: User's video playing with a simulated skeleton keypoint overlay (use `CustomPaint` over `video_player` to mock this).
-  - Score Section: Circular progress indicators showing "Rhythm Accuracy (85%)" and "Pose Match (90%)".
-  - Timeline: A horizontal bar under the video with red dots indicating mistakes (e.g., missed hit timing).
+# Expected Output (JSON Schema)
+The function must return a Python Dictionary (convertible to JSON) exactly matching this schema:
 
-## 5. Career & Talent Report Screen (Tab 3 or accessed via Feedback Screen)
-- **Layout:** Scrollable dashboard style.
-- **UI Elements:**
-  - **Talent Radar Chart:** Use `fl_chart` to display metrics like ROM (Range of Motion), Power, Rhythm, and Isolation.
-  - **Career Guide Card:** A chat-bubble or modern card UI containing LLM-generated text. It should feel empathetic and encouraging. (Dummy text: "너의 팝핑 타격감은 상위 10%야! 이 뛰어난 리듬감을 살려 안무가나 백업 댄서로 진로를 탐색해보는 건 어떨까? 지역 진로체험센터 프로그램을 추천해줄게.")
-
-# Tasks to Execute
-1. Initialize the Flutter project with a clean feature-first architecture (e.g., `lib/features/home`, `lib/features/studio`, `lib/core/theme`).
-2. Set up the Dark Theme with Neon accent colors.
-3. Implement the `go_router` setup with the `BottomNavigationBar` layout.
-4. Build the UI for the 5 screens described above using dummy data.
-5. Provide the Mock Repository files that feed data to the Home and Report screens.
-
-Please generate the code step-by-step, starting with the folder structure, theme setup, and router. Then proceed feature by feature. Let me know if you need any clarification before writing the code.
+```json
+{
+  "fps": 30.0,
+  "total_frames": 1800,
+  "frames": [
+    {
+      "frame_index": 0,
+      "time_sec": 0.0,
+      "landmarks": {
+        "left_shoulder": {"x": 0.52, "y": 0.31, "z": -0.15, "visibility": 0.99},
+        // ... all 33 landmarks
+      },
+      "normalized_landmarks": {
+        "left_shoulder": {"x": -0.2, "y": 0.8, "z": -0.1} 
+        // ... all 33 scaled & translated landmarks relative to Mid-Hip
+      }
+    }
+  ]
+}

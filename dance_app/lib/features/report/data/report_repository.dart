@@ -1,17 +1,29 @@
 class TalentRadarData {
+  final double creativity;
   final double rom;
   final double power;
-  final double rhythm;
   final double isolation;
-  final double creativity;
+  final double rhythm;
+  final double accuracy;
 
   const TalentRadarData({
+    required this.creativity,
     required this.rom,
     required this.power,
-    required this.rhythm,
     required this.isolation,
-    required this.creativity,
+    required this.rhythm,
+    required this.accuracy,
   });
+
+  /// 레이더 차트 축 순서: 창의성 → 가동범위 → 파워 → 아이솔 → 리듬 → 정확도
+  List<({String label, double value})> get axes => [
+        (label: '창의성', value: creativity),
+        (label: '가동범위', value: rom),
+        (label: '파워', value: power),
+        (label: '아이솔', value: isolation),
+        (label: '리듬', value: rhythm),
+        (label: '정확도', value: accuracy),
+      ];
 }
 
 class CareerReport {
@@ -37,11 +49,12 @@ class ReportRepository {
       genre: '팝핑',
       overallScore: 87,
       radar: TalentRadarData(
+        creativity: 0.72,
         rom: 0.78,
         power: 0.92,
-        rhythm: 0.88,
         isolation: 0.95,
-        creativity: 0.72,
+        rhythm: 0.88,
+        accuracy: 0.85,
       ),
       aiMessage:
           '너의 팝핑 타격감은 상위 10%야! 이 뛰어난 리듬감을 살려 안무가나 백업 댄서로 진로를 탐색해보는 건 어떨까? 지역 진로체험센터 프로그램을 추천해줄게.',
