@@ -1,0 +1,344 @@
+import 'package:fl_chart/fl_chart.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/neon_badge.dart';
+import '../data/report_repository.dart';
+
+final reportProvider = FutureProvider<CareerReport>((ref) {
+  return ReportRepository().fetchReport();
+});
+
+class ReportScreen extends ConsumerWidget {
+  const ReportScreen({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final asyncReport = ref.watch(reportProvider);
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: SafeArea(
+        child: asyncReport.when(
+          data: (report) => _ReportBody(report: report),
+          loading: () => const Center(
+            child: CircularProgressIndicator(color: AppColors.neonGreen),
+          ),
+          error: (e, _) => Center(
+            child: Text('오류: $e', style: const TextStyle(color: AppColors.error)),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ReportBody extends StatelessWidget {
+  final CareerReport report;
+
+  const _ReportBody({required this.report});
+
+  @override
+  Widget build(BuildContext context) {
+    return CustomScrollView(
+      slivers: [
+        SliverToBoxAdapter(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 20, 20, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '재능\n리포트',
+                  style: Theme.of(context).textTheme.displayLarge?.copyWith(
+                        foreground: Paint()
+                          ..shader = const LinearGradient(
+                            colors: [AppColors.neonPurple, AppColors.neonBlue],
+                          ).createShader(const Rect.fromLTWH(0, 0, 200, 60)),
+                      ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  children: [
+                    NeonBadge(label: report.genre, color: AppColors.neonGreen),
+                    const SizedBox(width: 8),
+                    NeonBadge(
+                      label: '점수 ${report.overallScore}',
+                      color: AppColors.neonPurple,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 24),
+                _RadarChartCard(radar: report.radar),
+                const SizedBox(height: 20),
+                _AiMessageCard(message: report.aiMessage),
+                const SizedBox(height: 20),
+                _CareerCards(careers: report.recommendedCareers),
+                const SizedBox(height: 32),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RadarChartCard extends StatelessWidget {
+  final TalentRadarData radar;
+
+  const _RadarChartCard({required this.radar});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.neonPurple.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.radar, color: AppColors.neonPurple, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                '재능 레이더',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: AppColors.neonPurple,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            height: 240,
+            child: RadarChart(
+              RadarChartData(
+                radarShape: RadarShape.polygon,
+                tickCount: 4,
+                ticksTextStyle: const TextStyle(color: Colors.transparent, fontSize: 0),
+                gridBorderData: const BorderSide(color: AppColors.divider, width: 1),
+                radarBorderData: const BorderSide(color: AppColors.divider, width: 1),
+                titlePositionPercentageOffset: 0.2,
+                titleTextStyle: const TextStyle(
+                  color: AppColors.textSecondary,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w600,
+                ),
+                getTitle: (index, _) {
+                  const labels = ['가동범위', '파워', '리듬', '아이솔', '창의성'];
+                  return RadarChartTitle(text: labels[index]);
+                },
+                dataSets: [
+                  RadarDataSet(
+                    fillColor: AppColors.neonPurple.withValues(alpha: 0.2),
+                    borderColor: AppColors.neonPurple,
+                    borderWidth: 2,
+                    entryRadius: 4,
+                    dataEntries: [
+                      RadarEntry(value: radar.rom * 100),
+                      RadarEntry(value: radar.power * 100),
+                      RadarEntry(value: radar.rhythm * 100),
+                      RadarEntry(value: radar.isolation * 100),
+                      RadarEntry(value: radar.creativity * 100),
+                    ],
+                  ),
+                ],
+                tickBorderData: const BorderSide(color: AppColors.divider, width: 1),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          // Legend row
+          Wrap(
+            spacing: 16,
+            runSpacing: 8,
+            children: [
+              _LegendItem(label: '가동범위', value: radar.rom),
+              _LegendItem(label: '파워', value: radar.power),
+              _LegendItem(label: '리듬', value: radar.rhythm),
+              _LegendItem(label: '아이솔', value: radar.isolation),
+              _LegendItem(label: '창의성', value: radar.creativity),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _LegendItem extends StatelessWidget {
+  final String label;
+  final double value;
+
+  const _LegendItem({required this.label, required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 8,
+          height: 8,
+          decoration: const BoxDecoration(
+            color: AppColors.neonPurple,
+            shape: BoxShape.circle,
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(
+          '$label ${(value * 100).toInt()}',
+          style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
+        ),
+      ],
+    );
+  }
+}
+
+class _AiMessageCard extends StatelessWidget {
+  final String message;
+
+  const _AiMessageCard({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            AppColors.neonGreen.withValues(alpha: 0.08),
+            AppColors.neonPurple.withValues(alpha: 0.08),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.neonGreen.withValues(alpha: 0.3)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.neonGreen.withValues(alpha: 0.15),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Text('🤖', style: TextStyle(fontSize: 20)),
+              ),
+              const SizedBox(width: 10),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'AI 커리어 가이드',
+                    style: TextStyle(
+                      color: AppColors.neonGreen,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  Text(
+                    'LLM 분석 기반',
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 11),
+                  ),
+                ],
+              ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              message,
+              style: const TextStyle(
+                color: AppColors.textPrimary,
+                fontSize: 15,
+                height: 1.7,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CareerCards extends StatelessWidget {
+  final List<String> careers;
+
+  const _CareerCards({required this.careers});
+
+  static const _icons = ['💃', '🎭', '🎬', '🎵'];
+  static const _colors = [
+    AppColors.neonGreen,
+    AppColors.neonPurple,
+    AppColors.neonBlue,
+    Color(0xFFFF9F0A),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text(
+          '추천 진로',
+          style: TextStyle(
+            color: AppColors.textSecondary,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.8,
+          ),
+        ),
+        const SizedBox(height: 12),
+        GridView.builder(
+          shrinkWrap: true,
+          physics: const NeverScrollableScrollPhysics(),
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 2,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            childAspectRatio: 2.2,
+          ),
+          itemCount: careers.length,
+          itemBuilder: (_, i) => Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.card,
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(color: _colors[i % _colors.length].withValues(alpha: 0.3)),
+            ),
+            child: Row(
+              children: [
+                Text(_icons[i % _icons.length], style: const TextStyle(fontSize: 24)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    careers[i],
+                    style: TextStyle(
+                      color: _colors[i % _colors.length],
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
