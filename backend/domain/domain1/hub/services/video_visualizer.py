@@ -7,9 +7,7 @@ import cv2
 import numpy as np
 
 from .pose_geometry import BONE_SEGMENTS
-
-# domain1/video_data
-VIDEO_DATA_DIR = Path(__file__).resolve().parent.parent.parent / "video_data"
+from .storage_paths import VIDEO_DATA_DIR, build_annotated_video_meta, ensure_storage_dirs
 
 # MediaPipe Pose landmark index pairs (solutions.pose.POSE_CONNECTIONS)
 _MP_POSE_CONNECTIONS = (
@@ -41,7 +39,7 @@ COLOR_PANEL_BG = (24, 24, 28)
 
 
 def ensure_video_data_dir() -> Path:
-    VIDEO_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    ensure_storage_dirs()
     return VIDEO_DATA_DIR
 
 
@@ -287,10 +285,4 @@ def render_annotated_video(
     return output_path
 
 
-def build_annotated_video_meta(filename: str) -> dict:
-    """JSON 응답에 넣을 annotated_video 메타."""
-    return {
-        "filename": filename,
-        "relative_path": f"domain/domain1/video_data/{filename}",
-        "url": f"/video/data/{filename}",
-    }
+# build_annotated_video_meta → storage_paths에서 re-export

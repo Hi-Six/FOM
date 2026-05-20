@@ -219,7 +219,10 @@ domain1/
 
 ---
 
-## 10. 참고 문서
+## 15. 참고 문서
 - `IMPLEMENTATION_STATUS.md`: 현재 구현 진행 상황
+- `CURRENT_LOGIC.md`: 추출·정규화·비교 로직 실제 동작과 한계 (시작점·체형·시점 대응)
+- `COMPARISON_STRATEGY.md`: 두 영상 비교·채점 API 구현 전략 (정렬·Accuracy 알고리즘)
 - `ARCHITECTURE.md`: 시스템 아키텍처 상세
+- `VIEWPOINT_INVARIANCE.md`: 카메라 앵글·`landmarks` 한계와 Accuracy 대안 전략
 - `API_SPEC.md`: REST API 명세

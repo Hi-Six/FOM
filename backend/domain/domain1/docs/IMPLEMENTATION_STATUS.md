@@ -12,7 +12,7 @@
 | Phase | 기능 | 상태 | 완성도 | 비고 |
 |-------|------|------|--------|------|
 | **Phase 1** | 비디오 데이터 추출 모듈 | ✅ 완료 | 100% | 프로덕션 준비 완료 |
-| **Phase 2** | 6개 채점 함수 구현 | ⏳ 대기 | 0% | 팀 분업 예정 |
+| **Phase 2** | 6개 채점 함수 구현 | 🔄 진행 중 | ~25% | Accuracy + `/compare` 완료 |
 | **Phase 3** | LLM 피드백 생성 | ⏳ 대기 | 0% | Phase 2 이후 시작 |
 | **Phase 4** | 프론트엔드 시각화 | ⏳ 대기 | 0% | 별도 팀 담당 |
 
@@ -154,9 +154,13 @@ def score_all(extraction_result: dict) -> dict:
 ```
 
 ### 3.2 구현 진행 상황
-- ⏳ 각 함수 담당자 미지정
-- ⏳ 알고리즘 수식 미확정
-- ⏳ 테스트 데이터셋 미준비 (전문가 영상 + 정답 레이블)
+- [x] **Accuracy** — `accuracy_scorer.py` (joint_angles 60% + bone_vectors 40%)
+- [x] **비교 API** — `POST /video/compare` (video_json 파일명 2개)
+- [x] **JSON 저장** — `POST /video/extract` → `video_data/video_json/`
+- [x] **프레임 정렬** — `align_by_time` (MVP)
+- ⏳ ROM, Power, Isolation, Rhythm, Creativity
+- ⏳ DTW 정렬 (`alignment_method=dtw`)
+- ⏳ 실영상 통합 테스트 (동일 영상 95점+)
 
 ---
 
@@ -367,7 +371,10 @@ def generate_feedback(scores: dict) -> dict:
 ## 11. 참고 자료
 
 - `PROJECT_CONTEXT.md`: 프로젝트 기획과 목표
+- `CURRENT_LOGIC.md`: 현재 비교 로직 실제 동작·보정·한계 (시작점·체형·시점)
+- `COMPARISON_STRATEGY.md`: 두 영상 비교·채점 구현 전략 (정렬 알고리즘·Accuracy·6개 함수)
 - `ARCHITECTURE.md`: 시스템 아키텍처 상세
+- `VIEWPOINT_INVARIANCE.md`: `landmarks` 시점 한계 및 Accuracy 대안 (joint_angles / 3D 회전 / 촬영 UI)
 - `CLAUDE.md`: AI 개발 가이드
 - `requirements.txt`: Python 의존성
 - Swagger UI: `http://localhost:8000/docs`
