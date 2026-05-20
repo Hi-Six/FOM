@@ -3,8 +3,7 @@ import mediapipe as mp
 import numpy as np
 import pandas as pd
 from typing import Dict, List, Optional
-from ...models.transfer.video_data import VideoExtractionResult, FrameData
-from ...models.bases.landmark import Landmark, NormalizedLandmark
+from .pose_geometry import compute_bone_vectors, compute_joint_angles
 
 # MediaPipe의 33개 랜드마크 이름 매핑
 LANDMARK_NAMES = [
@@ -19,10 +18,6 @@ LANDMARK_NAMES = [
     "left_foot_index", "right_foot_index",
 ]
 
-LEFT_HIP_IDX = 23
-RIGHT_HIP_IDX = 24
-
-
 def extract_dance_data(video_path: str) -> dict:
     """
     4단계 파이프라인:
@@ -32,6 +27,7 @@ def extract_dance_data(video_path: str) -> dict:
     4) 정규화 2단계
        - Step A: Mid-Hip 기준 이동 → Mid-Hip을 (0,0,0)으로
        - Step B: Torso Length(Mid-Shoulder↔Mid-Hip 거리)로 나눠 체형 스케일 제거
+    5) bone_vectors / joint_angles (정규화 좌표 기준, Accuracy·코사인 비교용)
     """
     # ── Step 1: 메타데이터 추출 ──────────────────────────────────────────────
     cap = cv2.VideoCapture(video_path)
@@ -127,11 +123,16 @@ def extract_dance_data(video_path: str) -> dict:
                 "z": float((landmarks[name]["z"] - mid_hip_z) / torso_length),
             }
 
+        bone_vectors = compute_bone_vectors(normalized_landmarks)
+        joint_angles = compute_joint_angles(normalized_landmarks)
+
         frames_output.append({
             "frame_index": int(fi),
             "time_sec": round(int(fi) / fps, 4),
             "landmarks": landmarks,
             "normalized_landmarks": normalized_landmarks,
+            "bone_vectors": bone_vectors,
+            "joint_angles": joint_angles,
         })
 
     return {

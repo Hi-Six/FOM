@@ -4,7 +4,7 @@ from routers.video import router as video_router
 
 app = FastAPI(
     title="Dance AI — Video Extraction API",
-    description="동영상 업로드 → MediaPipe 3D 랜드마크 추출 → 스무딩 → 정규화 → JSON 반환",
+    description="동영상 업로드 → 랜드마크 추출 → 분석 오버레이 영상 저장(video_data) → JSON 반환",
     version="0.1.0",
 )
 

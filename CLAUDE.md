@@ -65,6 +65,15 @@ The function must return a Python Dictionary (convertible to JSON) exactly match
       "normalized_landmarks": {
         "left_shoulder": {"x": -0.2, "y": 0.8, "z": -0.1} 
         // ... all 33 scaled & translated landmarks relative to Mid-Hip
+      },
+      "bone_vectors": {
+        "left_upper_arm": {"x": 0.12, "y": -0.45, "z": 0.03, "magnitude": 0.35}
+        // ... unit direction + length in normalized space (for cosine similarity)
+      },
+      "joint_angles": {
+        "left_elbow": 142.5,
+        "right_knee": 165.2
+        // ... degrees at key joints
       }
     }
   ]
