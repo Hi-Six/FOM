@@ -2,9 +2,22 @@
 You are an expert Python Backend Developer and Computer Vision Engineer. Your task is to build the core Video Data Extraction Module for a Street Dance Analysis MVP.
 
 # Project Context
-- **Domain:** AI Street Dance Level Judgment Platform.
+
+## 프로젝트 개요
+- **프로젝트명:** 폼미쳤다 (FOM) - "너 오늘 춤 폼 미쳤다" 할 때 그 폼! 진단받고 폼 확인하는 곳
+- **팀명:** Hi-Six - "인사는 가볍게, 퀄리티는 높게(High)! 완벽한 호흡으로 뭉친 6명의 인재들"
+- **Domain:** AI 기반 10대 대상 스트릿 댄스 수준 판단 및 진로 지도 플랫폼
+- **캐치프레이즈:** "방구석이 나만의 무대로, AI가 찾아주는 나의 댄스 DNA"
+
+## 프로젝트 목적
+1. AI 비전 기술을 활용해 10대 청소년의 스트릿 댄스 동작을 전문가 영상과 정밀하게 비교·평가
+2. 분석 데이터를 기반으로 맞춤형 교정 피드백과 LLM 중심의 실질적인 진로 지도 가이드 제공
+3. 1주일 내 웹 MVP 플랫폼 구축
+
+## 아키텍처 설계
 - **Architecture:** We have 6 separate scoring functions (ROM, Power, Isolation, Rhythm, Creativity, Accuracy) that will be developed by different team members. 
 - **Goal:** To prevent server overload and ensure parallel development, you must build **ONE common extraction module**. This module will process an uploaded video once, extract the 3D landmarks, clean the data, normalize it, and return a standardized JSON array. This JSON will then be passed as an argument to the 6 scoring functions.
+- **Data Flow:** 영상 업로드 → 공통 추출 모듈(domain1) → 표준 JSON → 6개 채점 함수 → LLM 피드백 생성 → 결과 시각화
 
 # Tech Stack & Constraints
 - Python 3.9+
