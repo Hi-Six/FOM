@@ -1,11 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-
 from routers.video import router as video_router
 
 app = FastAPI(
-    title="FOM — Dance Analysis API",
-    description="6차원 채점 통합 API (`POST /video/analyze`)",
+    title="Dance AI — Video Extraction API",
+    description="동영상 업로드 → 랜드마크 추출 → 분석 오버레이 영상 저장(video_data) → JSON 반환",
     version="0.1.0",
 )
 
@@ -20,5 +19,5 @@ app.include_router(video_router)
 
 
 @app.get("/health")
-def health() -> dict:
+def health():
     return {"status": "ok"}
