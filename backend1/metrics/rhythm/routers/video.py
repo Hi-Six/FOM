@@ -19,7 +19,7 @@ from metrics.rhythm.services.analyze_service import (
 )
 from metrics.rhythm.services.storage_paths import VIDEO_DATA_DIR, load_extraction_json
 
-router = APIRouter(prefix="/video", tags=["video"])
+router = APIRouter(prefix="/rhythm", tags=["rhythm"])
 
 
 def _inject_upload_timing(result: Dict[str, Any], upload_sec: float, t0: float) -> Dict[str, Any]:

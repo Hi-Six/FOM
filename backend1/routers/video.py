@@ -11,9 +11,12 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from domain.domain1.hub.services.analyze_service import run_analyze
-from domain.domain1.hub.services.comparison_service import compute_comparison
-from domain.domain1.hub.services.extraction_pipeline import run_extraction_and_save
+from services.orchestrator import run_analyze_from_json
+from services.extract_coordinator import run_user_extractions_parallel
+from domain.domain1.hub.services.extraction_pipeline import (
+    build_reference_meta,
+    run_extraction_and_save,
+)
 from domain.domain1.hub.services.video_input import acquire_video_to_temp
 from domain.domain1.hub.services.storage_paths import (
     load_extraction_json,
@@ -41,6 +44,23 @@ class AnalyzeJsonRequest(BaseModel):
         description="Accuracy 채점 (full_v1 JSON 필요). ROM만 쓸 때 False",
     )
     enable_rom: bool = Field(True, description="ROM 채점 (domain1)")
+    metrics: Optional[list[str]] = Field(
+        None,
+        description=(
+            "채점할 metric 목록. None이면 enable_accuracy/enable_rom 로 결정, "
+            "둘 다 기본이면 6개 전체: accuracy, creativity, isolation, power, rhythm, rom"
+        ),
+    )
+    fail_fast: bool = Field(
+        False,
+        description="True면 첫 metric 예외 시 전체 실패. False면 해당 metric만 error",
+    )
+
+
+def _parse_metrics_form(metrics: Optional[str]) -> Optional[list[str]]:
+    if not metrics or not str(metrics).strip():
+        return None
+    return [m.strip() for m in metrics.split(",") if m.strip()]
 
 
 @router.post(
@@ -49,9 +69,10 @@ class AnalyzeJsonRequest(BaseModel):
     description=(
         "사용자 동영상: multipart file 또는 video_url(HTTP(S) 직링크) 중 하나. "
         "reference_json은 video_json/에 미리 저장된 전문가 추출 JSON 파일명입니다. "
-        "서버가 사용자 영상을 추출(기본 rom_v1·15fps)한 뒤 레퍼런스와 비교합니다. "
-        "기본: ROM 전용(enable_accuracy=false). "
-        "저장 JSON만으로 채점할 때는 POST /video/analyze/json."
+        "Phase A: metric별 추출 병렬(rom/rhythm/power/creativity). "
+        "Phase B: 오케스트레이터 6 metric 채점. "
+        "metrics 생략 시 enable_* 또는 6개 전체. "
+        "저장 JSON만 채점: POST /video/analyze/json."
     ),
 )
 async def analyze_video(
@@ -86,6 +107,14 @@ async def analyze_video(
         None,
         description="지정 시 target_fps보다 우선",
     ),
+    metrics: Optional[str] = Form(
+        None,
+        description=(
+            "채점 metric (쉼표 구분). 예: accuracy,creativity,isolation,power,rhythm,rom. "
+            "비우면 enable_accuracy/enable_rom 또는 6개 전체"
+        ),
+    ),
+    fail_fast: bool = Form(False),
 ):
     tmp_path = None
     try:
@@ -93,22 +122,64 @@ async def analyze_video(
             upload=user_video, video_url=video_url
         )
         effective_target = target_fps if target_fps and target_fps > 0 else None
-        result = run_analyze(
-            user_video_path=tmp_path,
-            reference_json_filename=reference_json,
+        metrics_list = _parse_metrics_form(metrics)
+
+        from services.orchestrator import resolve_metrics_list
+
+        scoring_metrics = resolve_metrics_list(
+            metrics_list,
+            enable_accuracy=enable_accuracy,
+            enable_rom=enable_rom,
+        )
+
+        extract_result = await run_user_extractions_parallel(
+            tmp_path,
+            scoring_metrics=scoring_metrics,
+            extraction_mode=extraction_mode,
+            target_fps=effective_target,
+            frame_stride=frame_stride,
+            fail_fast=fail_fast,
+        )
+
+        score_result = await run_analyze_from_json(
+            extract_result["canonical_json"],
+            reference_json,
             alignment_method=alignment_method,
             user_offset_sec=user_offset_sec,
             ref_offset_sec=ref_offset_sec,
             auto_detect_start=auto_detect_start,
             detail_level=detail_level,
             scoring_mode=scoring_mode,
+            metrics=metrics_list,
             enable_accuracy=enable_accuracy,
             enable_rom=enable_rom,
-            extraction_mode=extraction_mode,
-            target_fps=effective_target,
-            frame_stride=frame_stride,
+            fail_fast=fail_fast,
         )
-        return JSONResponse(content=result)
+
+        user_public = {
+            "extraction_id": extract_result["user"].get("extraction_id"),
+            "extraction_json": extract_result["user"].get("extraction_json"),
+            "annotated_video": extract_result["user"].get("annotated_video"),
+            "fps": extract_result["user"].get("fps"),
+            "total_frames": extract_result["user"].get("total_frames"),
+        }
+
+        return JSONResponse(
+            content={
+                "user": user_public,
+                "reference": build_reference_meta(reference_json),
+                "extractions": extract_result.get("extractions"),
+                "alignment": score_result.get("alignment"),
+                "scores": score_result.get("scores"),
+                "meta": {
+                    **(score_result.get("meta") or {}),
+                    "user_json": extract_result["canonical_json"],
+                    "reference_json": reference_json,
+                    "rom_extraction_mode": extract_result.get("rom_mode"),
+                    "pipelines_run": extract_result.get("pipelines_run"),
+                },
+            }
+        )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except httpx.HTTPError as e:
@@ -127,22 +198,25 @@ async def analyze_video(
     summary="저장 JSON 2개로 채점 (ARCHITECTURE §2.1)",
     description=(
         "이미 추출·저장된 user_json / reference_json으로만 채점합니다. "
+        "metrics 로 6개 전체 지정 가능: accuracy, creativity, isolation, power, rhythm, rom. "
         "유저 영상 업로드는 POST /video/analyze 를 사용하세요."
     ),
 )
 async def analyze_video_from_json(body: AnalyzeJsonRequest) -> dict:
     try:
-        result = compute_comparison(
-            user_json_filename=body.user_json,
-            reference_json_filename=body.reference_json,
+        result = await run_analyze_from_json(
+            body.user_json,
+            body.reference_json,
             alignment_method=body.alignment_method,
             user_offset_sec=body.user_offset_sec,
             ref_offset_sec=body.ref_offset_sec,
             auto_detect_start=body.auto_detect_start,
             detail_level=body.detail_level,
             scoring_mode=body.scoring_mode,
+            metrics=body.metrics,
             enable_accuracy=body.enable_accuracy,
             enable_rom=body.enable_rom,
+            fail_fast=body.fail_fast,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -151,13 +225,7 @@ async def analyze_video_from_json(body: AnalyzeJsonRequest) -> dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"채점 중 오류: {e}") from e
 
-    return {
-        "alignment": result.get("alignment"),
-        "scores": result.get("scores"),
-        "meta": result.get("meta"),
-        "user_json": result.get("user_json", body.user_json),
-        "reference_json": result.get("reference_json", body.reference_json),
-    }
+    return result
 
 
 @router.post(

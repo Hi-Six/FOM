@@ -13,6 +13,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers.video import router as video_router
+from metrics.isolation.router import router as isolation_router
+from metrics.power.routers.video import router as power_router
 from metrics.rhythm.routers.video import router as rhythm_router
 
 app = FastAPI(
@@ -20,8 +22,9 @@ app = FastAPI(
     description=(
         "통합 API (backend1). "
         "POST /video/analyze — 유저 영상 업로드 + 레퍼런스 JSON 채점. "
-        "POST /video/analyze/json — 저장 JSON 2개 채점. "
-        "POST /video/extract — ROM domain1 추출."
+        "POST /video/analyze/json — 저장 JSON 2개, 6 metric 병렬 채점. "
+        "POST /video/extract — ROM domain1 추출. "
+        "POST /rhythm/* — rhythm 전용 (레거시·개발)."
     ),
     version="0.1.0",
 )
@@ -33,8 +36,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(rhythm_router)   # rhythm: /video/analyze, /video/extract, /video/visualize 등
-app.include_router(video_router)    # 통합 오케스트레이터 stub (501)
+# prefix 충돌 방지: /video = 통합, /rhythm /isolation /power = metric 전용
+app.include_router(video_router)
+app.include_router(rhythm_router)
+app.include_router(isolation_router)
+app.include_router(power_router)
 
 
 @app.get("/health")
@@ -43,4 +49,10 @@ def health() -> dict:
         "status": "ok",
         "entry": "backend1/main.py",
         "rom_domain": "metrics/rom/domain/domain1",
+        "routes": {
+            "video": "/video/*",
+            "rhythm": "/rhythm/*",
+            "isolation": "/isolation/*",
+            "power": "/power/*",
+        },
     }
