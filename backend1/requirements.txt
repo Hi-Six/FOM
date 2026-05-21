@@ -3,7 +3,7 @@ numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.12.0
 opencv-python>=4.9.0
-mediapipe>=0.10.14
+mediapipe==0.10.31
 pydantic>=2.6.0
 
 # API (optional local server)
@@ -12,6 +12,3 @@ uvicorn[standard]>=0.27.0
 
 # YOLO11 — optional; set use_yolo=True in pipeline config
 # ultralytics>=8.2.0
-
-
-mediapipe[solutions]>=0.10.14

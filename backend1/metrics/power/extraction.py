@@ -1,9 +1,17 @@
 """Power metric 전용 — 영상에서 파워 측정에 필요한 데이터 추출 파이프라인."""
 
+import urllib.request
+from pathlib import Path
 from typing import Dict, List, Optional
 
 import cv2
 import mediapipe as mp
+from mediapipe.tasks.python import BaseOptions
+from mediapipe.tasks.python.vision import (
+    PoseLandmarker,
+    PoseLandmarkerOptions,
+    RunningMode,
+)
 import numpy as np
 import pandas as pd
 
@@ -22,6 +30,19 @@ _LANDMARK_NAMES: List[str] = [
     "left_foot_index", "right_foot_index",
 ]
 
+# pose_landmarker_full = 기존 model_complexity=1 에 해당
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+)
+_MODEL_PATH = Path(__file__).resolve().parent / "pose_landmarker_full.task"
+
+
+def _ensure_model() -> str:
+    if not _MODEL_PATH.exists():
+        urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    return str(_MODEL_PATH)
+
 
 def extract_power_data(video_path: str) -> dict:
     """
@@ -29,7 +50,7 @@ def extract_power_data(video_path: str) -> dict:
 
     처리 단계:
       1) 메타데이터 추출 (fps, total_frames)
-      2) MediaPipe로 프레임별 랜드마크 추출
+      2) MediaPipe Tasks API로 프레임별 랜드마크 추출
       3) 선형 보간 + 이동평균 스무딩 (NaN 처리)
       4) 정규화
            Step A — Mid-Hip을 원점(0,0,0)으로 이동
@@ -43,7 +64,7 @@ def extract_power_data(video_path: str) -> dict:
 
     fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
 
-    # ── Step 2: MediaPipe 랜드마크 추출 ──────────────────────────────────────
+    # ── Step 2: MediaPipe Tasks API 랜드마크 추출 ─────────────────────────────
     cols = [
         f"{name}_{coord}"
         for name in _LANDMARK_NAMES
@@ -51,31 +72,37 @@ def extract_power_data(video_path: str) -> dict:
     ]
     raw_rows: List[Optional[List[float]]] = []
 
-    pose = mp.solutions.pose.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        smooth_landmarks=True,
-        min_detection_confidence=0.5,
+    options = PoseLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=_ensure_model()),
+        running_mode=RunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
     )
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
-        if result.pose_landmarks:
-            row: List[float] = []
-            for lm in result.pose_landmarks.landmark:
-                row.extend([lm.x, lm.y, lm.z, lm.visibility])
-            raw_rows.append(row)
-        else:
-            # 랜드마크 미검출 프레임 → NaN 삽입 (이후 보간)
-            raw_rows.append([np.nan] * len(cols))
+    frame_index = 0
+    with PoseLandmarker.create_from_options(options) as landmarker:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            timestamp_ms = int(frame_index * 1000 / fps)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            result = landmarker.detect_for_video(mp_image, timestamp_ms)
+
+            if result.pose_landmarks:
+                row: List[float] = []
+                for lm in result.pose_landmarks[0]:
+                    row.extend([lm.x, lm.y, lm.z, lm.visibility])
+                raw_rows.append(row)
+            else:
+                # 랜드마크 미검출 프레임 → NaN 삽입 (이후 보간)
+                raw_rows.append([np.nan] * len(cols))
+            frame_index += 1
 
     cap.release()
-    pose.close()
 
     # ── Step 3: 보간 + 이동평균 스무딩 ───────────────────────────────────────
     df = pd.DataFrame(raw_rows, columns=cols)
