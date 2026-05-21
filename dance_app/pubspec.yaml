@@ -36,4 +36,8 @@ flutter:
   assets:
     - assets/lottie/
     - assets/images/
-    - video_data/
+    - video_data/card1/
+    - video_data/card2/
+    - video_data/card3/
+    - video_data/card4/
+    - video_data/card5/

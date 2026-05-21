@@ -64,9 +64,38 @@ def load_extraction_json(filename: str) -> Dict[str, Any]:
         return json.load(f)
 
 
+EXTRACTION_SCHEMA_ROM = "rom_v1"
+
+
+def is_rom_schema(data: Dict[str, Any]) -> bool:
+    return data.get("schema") == EXTRACTION_SCHEMA_ROM
+
+
+def load_rom_fields(filename: str) -> Dict[str, Any]:
+    """ROM 채점·정렬용 최소 필드."""
+    data = load_extraction_json(filename)
+    light_frames = [
+        {
+            "frame_index": f["frame_index"],
+            "time_sec": f["time_sec"],
+            "joint_angles": f.get("joint_angles"),
+        }
+        for f in data.get("frames", [])
+    ]
+    return {
+        "schema": data.get("schema"),
+        "fps": data.get("fps"),
+        "total_frames": data.get("total_frames"),
+        "sample_stride": data.get("sample_stride"),
+        "frames": light_frames,
+    }
+
+
 def load_comparison_fields(filename: str) -> Dict[str, Any]:
     """비교·정렬에 필요한 필드만 로드 (메모리 절약)."""
     data = load_extraction_json(filename)
+    if is_rom_schema(data):
+        return load_rom_fields(filename)
     light_frames = [
         {
             "frame_index": f["frame_index"],
@@ -78,6 +107,7 @@ def load_comparison_fields(filename: str) -> Dict[str, Any]:
         for f in data.get("frames", [])
     ]
     return {
+        "schema": data.get("schema"),
         "fps": data.get("fps"),
         "total_frames": data.get("total_frames"),
         "frames": light_frames,

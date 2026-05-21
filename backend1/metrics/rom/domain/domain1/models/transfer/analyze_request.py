@@ -18,4 +18,20 @@ class AnalyzeFormParams(BaseModel):
     auto_detect_start: bool = Field(default=False)
     detail_level: Literal["summary", "full"] = Field(default="summary")
     scoring_mode: Literal["linear", "dance"] = Field(default="dance")
+    enable_accuracy: bool = Field(
+        default=False,
+        description="Accuracy 채점 (full 추출·full_v1 JSON 필요)",
+    )
     enable_rom: bool = Field(default=True)
+    extraction_mode: Literal["rom", "full"] = Field(
+        default="rom",
+        description="사용자 영상 추출 모드",
+    )
+    target_fps: float | None = Field(
+        default=15.0,
+        description="ROM 샘플링 목표 fps. 0 이하면 전체 프레임",
+    )
+    frame_stride: int | None = Field(
+        default=None,
+        description="지정 시 target_fps보다 우선",
+    )

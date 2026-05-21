@@ -4,24 +4,51 @@ import 'package:flutter/foundation.dart';
 ///
 /// 실기기(폰)는 PC와 같은 Wi‑Fi + PC IP 필수:
 /// `flutter run --dart-define=API_BASE_URL=http://192.168.x.x:8000`
+///
+/// 고정 데이터셋: backend1/metrics/docs/DEV_VIDEO_DATASET.md
 class ApiConfig {
+  /// Debug 기본 true → 촬영 없이 서버 MP4로 `POST /video/analyze/by-name`.
+  static bool get useDevServerUserVideo {
+    const flag = String.fromEnvironment('USE_DEV_SERVER_VIDEO');
+    if (flag == 'true') return true;
+    if (flag == 'false') return false;
+    return kDebugMode;
+  }
+
   static String get baseUrl {
     const fromEnv = String.fromEnvironment('API_BASE_URL');
     if (fromEnv.isNotEmpty) return fromEnv;
 
     if (kIsWeb) return 'http://127.0.0.1:8000';
 
-    // Android 에뮬레이터만 10.0.2.2 (실기기는 dart-define 으로 PC IP 지정)
     if (defaultTargetPlatform == TargetPlatform.android) {
       return 'http://10.0.2.2:8000';
     }
 
-    // Windows / macOS / iOS 시뮬레이터
     return 'http://127.0.0.1:8000';
   }
 
+  /// `GET /video/data/{filename}` — video_data/ 원본·annotated MP4.
+  static String videoDataUrl(String filename) =>
+      '$baseUrl/video/data/$filename';
+
+  static String get videoAnalyzeUrl => '$baseUrl/video/analyze';
+  static String get videoAnalyzeByNameUrl => '$baseUrl/video/analyze/by-name';
+  static String get healthUrl => '$baseUrl/health';
   static String get isolationAnalyzeUrl => '$baseUrl/isolation/analyze';
   static String get isolationReadyUrl => '$baseUrl/isolation/ready';
+
+  /// API 응답 `url` 필드(`/video/data/...`) → 재생 가능한 절대 URL.
+  static String? resolvePlaybackUrl(String? pathOrUrl) {
+    if (pathOrUrl == null || pathOrUrl.isEmpty) return null;
+    if (pathOrUrl.startsWith('http://') || pathOrUrl.startsWith('https://')) {
+      return pathOrUrl;
+    }
+    if (pathOrUrl.startsWith('/')) {
+      return '$baseUrl$pathOrUrl';
+    }
+    return videoDataUrl(pathOrUrl);
+  }
 
   static String get platformHint {
     if (kIsWeb) return 'Web → localhost';
