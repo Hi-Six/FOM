@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from routers.video import router as video_router
+from metrics.power.routers.video import router as power_router
 
 app = FastAPI(
     title="FOM — Dance Analysis API",
@@ -17,6 +18,7 @@ app.add_middleware(
 )
 
 app.include_router(video_router)
+app.include_router(power_router)
 
 
 @app.get("/health")
