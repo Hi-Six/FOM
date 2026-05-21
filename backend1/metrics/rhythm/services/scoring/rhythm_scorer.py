@@ -40,18 +40,18 @@ _DOWNSAMPLE_FPS = 5.0        # 계산량 절감용 다운샘플 목표 FPS
 _DTW_WINDOW = 50             # Sakoe-Chiba 밴드 (다운샘플 프레임 기준)
 _DTW_SCALE = 2.0             # 점수 감쇠 강도 (높을수록 엄격)
 
-# 레퍼런스 존재 시 두 점수의 혼합 비율
-_CONSISTENCY_WEIGHT = 0.35
+# consistency는 점수에 반영하지 않고 breakdown 진단용으로만 사용
+_CONSISTENCY_WEIGHT = 0.0
 
 # 음악 비트 비교 파라미터
 _BEAT_TOLERANCE_SEC = 0.2    # 비트와 동작 피크 간 허용 오차 (초)
 _BEAT_HIT_WEIGHT = 0.7       # 비트 적중률 가중치
 _BEAT_PRECISION_WEIGHT = 0.3 # 타이밍 정밀도 가중치
-_DTW_WEIGHT = 0.65
+_DTW_WEIGHT = 1.0
 
-# 통합 채점 (레퍼런스 영상 + 비트) 가중치
-_FULL_DTW_WEIGHT = 0.5
-_FULL_BEAT_WEIGHT = 0.5
+# 통합 채점 (레퍼런스 영상 + 비트) 가중치: beat 70%, DTW 30%
+_FULL_DTW_WEIGHT = 0.3
+_FULL_BEAT_WEIGHT = 0.7
 
 
 def _resolve_keypoints(genre: str) -> List[str]:
