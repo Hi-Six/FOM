@@ -184,3 +184,21 @@ flowchart LR
 | `/video/analyze` | ❌ | ✅ |
 | 6서비스 병렬 호출·결과 병합 | ❌ | ✅ |
 | 다른 metric / hub / 라우터 | ❌ | ✅ (오케스트레이션만) |
+
+---
+
+## 8. 통합 진입점 (`backend1`)
+
+| 역할 | 경로 |
+|------|------|
+| HTTP 시작 | `backend1/main.py` → `uvicorn main:app` |
+| 라우터 | `backend1/routers/video.py` |
+| ROM 구현 | `metrics/rom/domain/domain1/` (`rom_path.py`로 import) |
+
+| URL | 설명 |
+|-----|------|
+| `POST /video/analyze` | §2.1 JSON 채점 (오케스트레이터) |
+| `POST /video/extract` | 영상 추출 — ROM `domain1` 위임 |
+| `POST /video/compare` | JSON 2개 비교 (선택) |
+
+`metrics/rom/main.py`, `metrics/rom/routers/` 는 **제거됨**. ROM 담당은 `domain/domain1` 만 수정.

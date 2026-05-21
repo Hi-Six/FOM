@@ -1,17 +1,17 @@
-# domain1 — video extraction & talent scoring
+# domain1 — video extraction & scoring (metrics/rom/domain/domain1)
 numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.12.0
+fastdtw>=0.3.4
 opencv-python>=4.9.0
-mediapipe>=0.10.14
+mediapipe>=0.10.14,<0.10.30
 pydantic>=2.6.0
 
-# API (optional local server)
+# API
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
+httpx>=0.27.0
 
 # YOLO11 — optional; set use_yolo=True in pipeline config
 # ultralytics>=8.2.0
-
-
-mediapipe[solutions]>=0.10.14
+librosa>=0.10.0

@@ -17,13 +17,22 @@ def run_analyze(
     auto_detect_start: bool = False,
     detail_level: DetailLevel = "summary",
     scoring_mode: ScoringMode = "dance",
+    enable_accuracy: bool = False,
     enable_rom: bool = True,
+    extraction_mode: Literal["rom", "full"] = "rom",
+    target_fps: Optional[float] = None,
+    frame_stride: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     1) 사용자 영상 추출·저장
     2) reference_json(이미 video_json/에 있음)과 compare
     """
-    user_meta = run_extraction_and_save(user_video_path)
+    user_meta = run_extraction_and_save(
+        user_video_path,
+        mode=extraction_mode,
+        target_fps=target_fps,
+        frame_stride=frame_stride,
+    )
     user_json_name = user_meta["json_filename"]
 
     reference_meta = build_reference_meta(reference_json_filename)
@@ -37,6 +46,7 @@ def run_analyze(
         auto_detect_start=auto_detect_start,
         detail_level=detail_level,
         scoring_mode=scoring_mode,
+        enable_accuracy=enable_accuracy,
         enable_rom=enable_rom,
     )
 
