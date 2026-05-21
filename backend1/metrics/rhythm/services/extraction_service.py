@@ -1,12 +1,21 @@
-"""Rhythm 전용 MediaPipe 추출기 — 손목·발목 랜드마크만 추출."""
+"""Rhythm 전용 MediaPipe Tasks API 추출기 — PoseLandmarker 사용."""
 
+import urllib.request
+from pathlib import Path
 from typing import Any, Dict, List
 
 import cv2
 import mediapipe as mp
 import numpy as np
+from mediapipe.tasks import python as mp_python
+from mediapipe.tasks.python import vision as mp_vision
 
-_POSE = mp.solutions.pose
+# ── 모델 경로 ──────────────────────────────────────────────────────
+_MODEL_PATH = Path(__file__).parent.parent / "models" / "pose_landmarker_full.task"
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+)
 
 _KEYPOINT_IDX = {
     "left_wrist":     15,
@@ -18,6 +27,30 @@ _KEYPOINT_IDX = {
     "left_shoulder":  11,
     "right_shoulder": 12,
 }
+
+
+def _ensure_model() -> Path:
+    """모델 파일이 없으면 자동으로 다운로드한다."""
+    if _MODEL_PATH.exists():
+        return _MODEL_PATH
+    _MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    print(f"[rhythm] PoseLandmarker 모델 다운로드 중...\n  {_MODEL_URL}")
+    urllib.request.urlretrieve(_MODEL_URL, _MODEL_PATH)
+    print(f"[rhythm] 저장 완료: {_MODEL_PATH}")
+    return _MODEL_PATH
+
+
+def _create_landmarker() -> mp_vision.PoseLandmarker:
+    base_options = mp_python.BaseOptions(model_asset_path=str(_ensure_model()))
+    options = mp_vision.PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=mp_vision.RunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
+        min_tracking_confidence=0.5,
+    )
+    return mp_vision.PoseLandmarker.create_from_options(options)
 
 
 def extract_rhythm_data(video_path: str) -> Dict[str, Any]:
@@ -32,9 +65,8 @@ def extract_rhythm_data(video_path: str) -> Dict[str, Any]:
             {
               "frame_index": int,
               "time_sec": float,
-              "normalized_landmarks": {
-                "left_wrist": {"x":…,"y":…,"z":…}, …
-              }
+              "normalized_landmarks": {"left_wrist": {"x":…,"y":…,"z":…}, …},
+              "raw_landmarks": {"left_wrist": {"x":…,"y":…}, …},
             }, …
           ]
         }
@@ -44,41 +76,37 @@ def extract_rhythm_data(video_path: str) -> Dict[str, Any]:
         raise ValueError(f"영상을 열 수 없습니다: {video_path}")
 
     fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
-
-    pose = _POSE.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        smooth_landmarks=True,
-        min_detection_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
-
+    landmarker = _create_landmarker()
     raw: List[Dict[str, Any] | None] = []
+    fi = 0
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        timestamp_ms = int(fi / fps * 1000)
+        result = landmarker.detect_for_video(mp_image, timestamp_ms)
+
         if result.pose_landmarks:
-            lm = result.pose_landmarks.landmark
+            lm = result.pose_landmarks[0]
             raw.append({
                 name: {"x": lm[idx].x, "y": lm[idx].y, "z": lm[idx].z}
                 for name, idx in _KEYPOINT_IDX.items()
             })
         else:
             raw.append(None)
+        fi += 1
 
     cap.release()
-    pose.close()
+    landmarker.close()
 
     filled = _fill_missing(raw)
     frames_output: List[Dict[str, Any]] = []
 
     for fi, pts in enumerate(filled):
         norm = _normalize(pts)
-        # 시각화용 원본 화면 좌표 (MediaPipe [0,1] 이미지 공간)
         raw_lm = {
             name: {"x": pts[name]["x"], "y": pts[name]["y"]}
             for name in ("left_wrist", "right_wrist", "left_ankle", "right_ankle")
