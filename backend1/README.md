@@ -27,7 +27,7 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 - HTTP: `backend1/routers/video.py`
 - ROM 로직: `metrics/rom/domain/domain1/`
 - ROM 기술 정리: `metrics/rom/domain/domain1/docs/ROM_IMPLEMENTATION_TECH.md`
-- `rom_path.py`: `domain.domain1` import용 `sys.path`
+- `main.py` 시작부: `metrics/rom` → `sys.path` ( `domain.domain1` import용 )
 
 `metrics/rom/main.py`, `metrics/rom/routers/` 는 사용하지 않습니다.
 

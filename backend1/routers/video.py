@@ -11,10 +11,6 @@ from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
-from rom_path import ensure_rom_domain_on_path
-
-ensure_rom_domain_on_path()
-
 from domain.domain1.hub.services.analyze_service import run_analyze
 from domain.domain1.hub.services.comparison_service import compute_comparison
 from domain.domain1.hub.services.extraction_pipeline import run_extraction_and_save

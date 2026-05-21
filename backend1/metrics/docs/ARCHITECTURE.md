@@ -193,7 +193,7 @@ flowchart LR
 |------|------|
 | HTTP 시작 | `backend1/main.py` → `uvicorn main:app` |
 | 라우터 | `backend1/routers/video.py` |
-| ROM 구현 | `metrics/rom/domain/domain1/` (`rom_path.py`로 import) |
+| ROM 구현 | `metrics/rom/domain/domain1/` (`backend1/main.py`에서 `sys.path` 설정 후 import) |
 
 | URL | 설명 |
 |-----|------|

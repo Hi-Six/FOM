@@ -35,7 +35,7 @@ ROM metric 담당 코드는 **`domain/domain1`만** 수정하는 것을 전제�
 | 항목 | 위치 |
 |------|------|
 | HTTP 진입 | `backend1/main.py`, `backend1/routers/video.py` |
-| ROM import | `backend1/rom_path.py` → `metrics/rom`을 `sys.path`에 추가 → `from domain.domain1...` |
+| ROM import | `backend1/main.py` 시작부 → `metrics/rom`을 `sys.path`에 append → `from domain.domain1...` |
 | 의존성 | `backend1/requirements.txt` |
 
 `metrics/rom/main.py`, `metrics/rom/routers/video.py` 는 **사용하지 않음** (통합 서버만 기동).
@@ -305,7 +305,7 @@ ROM_score = mean(coverage[joint])   # 활성 관절만
 | 정렬·시작 감지 | `hub/services/scoring/alignment.py` |
 | 유저 영상 analyze | `hub/services/analyze_service.py` |
 | HTTP | `backend1/routers/video.py` |
-| path 설정 | `backend1/rom_path.py` |
+| path 설정 | `backend1/main.py` (통합 진입점만) |
 
 ---
 

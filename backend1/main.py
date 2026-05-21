@@ -1,10 +1,18 @@
+"""FOM 통합 API — uvicorn main:app (ROM path는 이 파일에서만 설정)."""
+
+import sys
+from pathlib import Path
+
+# routers/video → domain.domain1 import 전에 metrics/rom 을 sys.path에 추가
+_ROM_ROOT = Path(__file__).resolve().parent / "metrics" / "rom"
+_rom_root_str = str(_ROM_ROOT)
+if _rom_root_str not in sys.path:
+    sys.path.append(_rom_root_str)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from rom_path import ensure_rom_domain_on_path
 from routers.video import router as video_router
-
-ensure_rom_domain_on_path()
 
 app = FastAPI(
     title="FOM — Dance Analysis API",
