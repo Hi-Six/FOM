@@ -41,7 +41,7 @@ def _extract_positions(frames: List[Dict[str, Any]], joint: str) -> np.ndarray:
     for frame in frames:
         lm = frame.get("normalized_landmarks", {}).get(joint)
         if lm is None:
-            pos.append([0.0, 0.0, 0.0])
+            pos.append([np.nan, np.nan, np.nan])
         else:
             pos.append([float(lm["x"]), float(lm["y"]), float(lm["z"])])
     return np.array(pos)
@@ -78,8 +78,12 @@ def score_power(user_extraction: Dict[str, Any]) -> Dict[str, Any]:
 
         # 속도: 연속 프레임 간 이동 거리 × fps (torso_length/sec)
         vel = np.linalg.norm(np.diff(pos, axis=0), axis=1) * fps
+        vel = vel[~np.isnan(vel)]  # 누락 랜드마크 프레임 제외
 
-        # 가속도: 속도 변화량의 절댓값 (torso_length/sec²)
+        if len(vel) == 0:
+            continue
+
+        # 가속도: 속도 변화량의 절댓값 (torso_length/sec)
         acc = np.abs(np.diff(vel)) if len(vel) >= 2 else np.array([0.0])
 
         v_mean  = float(np.mean(vel))
@@ -122,8 +126,8 @@ def score_power(user_extraction: Dict[str, Any]) -> Dict[str, Any]:
 
     # 속도 composite: mean 50% + p75 30% + p95 20%
     vel_composite = 0.5 * g_vel_mean + 0.3 * g_vel_p75 + 0.2 * g_vel_p95
-    # 가속도 composite: 가속도를 동일 sigmoid 스케일로 맞추기 위해 fps로 정규화
-    acc_composite = (0.5 * g_acc_mean + 0.3 * g_acc_p75 + 0.2 * g_acc_p95) / max(fps, 1.0)
+    # 가속도 composite: mean 50% + p75 30% + p95 20%
+    acc_composite = 0.5 * g_acc_mean + 0.3 * g_acc_p75 + 0.2 * g_acc_p95
 
     # 최종 composite: 속도 70% + 가속도 30%
     composite = _VEL_WEIGHT * vel_composite + _ACC_WEIGHT * acc_composite

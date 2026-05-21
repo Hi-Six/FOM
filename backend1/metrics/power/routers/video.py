@@ -66,14 +66,15 @@ async def extract_video(file: UploadFile = File(...)):
             detail=f"지원하지 않는 형식입니다. 허용: {_ALLOWED_EXTENSIONS}",
         )
 
+    content = await file.read()
+    if len(content) > _MAX_FILE_SIZE_MB * 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=f"파일 크기가 {_MAX_FILE_SIZE_MB}MB를 초과합니다.",
+        )
+
     with tempfile.NamedTemporaryFile(suffix=ext, delete=False) as tmp:
         tmp_path = tmp.name
-        content = await file.read()
-        if len(content) > _MAX_FILE_SIZE_MB * 1024 * 1024:
-            raise HTTPException(
-                status_code=413,
-                detail=f"파일 크기가 {_MAX_FILE_SIZE_MB}MB를 초과합니다.",
-            )
         tmp.write(content)
 
     try:
