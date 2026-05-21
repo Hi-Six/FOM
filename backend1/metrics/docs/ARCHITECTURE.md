@@ -1,10 +1,9 @@
 # Metrics 아키텍처
 
-
+> 최종 갱신: 2026-05-21  
+> 구현·API 상세: [ORCHESTRATOR.md](./ORCHESTRATOR.md), [API_REFERENCE.md](./API_REFERENCE.md)
 
 ---
-
-
 
 ## 1. 구성
 
@@ -52,11 +51,13 @@
 
 
 
-- analyze 오케스트레이터는 **영상 추출·MediaPipe·공용 extract 파이프라인을 실행하지 않는다.**
+- **채점 오케스트레이터** (`services/orchestrator.py`)는 영상 추출·MediaPipe를 **실행하지 않는다** — 저장 JSON만 로드·정렬·`score_*` 병렬.
 
 - “오케스트레이터가 한 번 추출한 뒤, 각 도메인이 필터만 한다”는 모델이 **아니다.**
 
-- 추출과 채점(`score_*`)은 **같은 metric 폴더 안**에서 담당하되, **analyze 요청 안에서는 추출 단계가 없다.**
+- 추출과 채점(`score_*`)은 **같은 metric 폴더 안**에 두되, **채점 단계**에서는 추출을 하지 않는다.
+
+- **`POST /video/analyze`(multipart)** 는 예외적으로 라우터가 **Phase A** `extract_coordinator`(metric별 추출 병렬) → **Phase B** 오케스트레이터(채점) **2단계**다. **`POST /video/analyze/json`** 은 Phase B만.
 
 
 
@@ -64,9 +65,11 @@
 
 
 
-- `POST /video/analyze` 라우터
+- `POST /video/analyze`, `/video/analyze/json` 라우터 (`routers/video.py`)
 
-- analyze 오케스트레이터 (**저장된 추출 결과** 로드, 정렬, 6서비스 병렬 호출, 결과 병합)
+- **추출 조율:** `services/extract_coordinator.py` (Phase A, `/video/analyze` 만)
+
+- **채점 오케스트레이터:** `services/orchestrator.py` (저장 JSON 로드, 정렬, 6 `score_*` 병렬, `total_score`/`grade`)
 
 
 
@@ -88,15 +91,16 @@
 
 | 1 | **analyze 이전** | 사용자·레퍼런스 영상 → **metric별** 추출 JSON/특성 저장 | 각 `metrics/<이름>/` (`extract_*` 등) |
 
-| 2 | `POST /video/analyze` | 6차원 채점 (추출 없음) | analyze 오케스트레이터 |
+| 2a | `POST /video/analyze` | 유저 영상 업로드 → 추출 병렬 → 채점 | extract_coordinator → orchestrator |
+| 2b | `POST /video/analyze/json` | 6차원 채점 (추출 없음) | orchestrator 만 |
 
 
 
-클라이언트는 analyze 호출 전에, 필요한 metric마다 추출을 완료해 두거나, 통합 API가 metric 모듈을 **순차/병렬로 호출**해 artifact를 만든 뒤 analyze를 호출한다.
+클라이언트 권장: 레퍼런스는 `POST /video/extract` 로 JSON 1회 생성 → 유저는 `POST /video/analyze` (한 번에 추출+채점) 또는 이미 있는 JSON으로 `POST /video/analyze/json`.
 
 
 
-### 2.1 `POST /video/analyze`
+### 2.1 `POST /video/analyze/json`
 
 
 
@@ -120,11 +124,25 @@
 
 
 
-향후 metric별 artifact가 분리되면 `user_json` / `reference_json`을 metric 키별로 받는 형태로 확장할 수 있다. **오케스트레이터는 여전히 영상 파일을 받아 추출하지 않는다.**
+향후 metric별 artifact가 분리되면 `user_json` / `reference_json`을 metric 키별로 받는 형태로 확장할 수 있다.
+
+**`metrics`:** `null` 이면 6개 전체. `["rom"]` 등 부분 채점 가능. `enable_accuracy` / `enable_rom` 은 `metrics` 지정 시 무시(레거시).
+
+**`fail_fast`:** 기본 `false` — 실패 metric 은 `breakdown.error`, 나머지 계속. `true` 이면 첫 예외 시 전체 실패.
+
+필드·응답 전체: [API_REFERENCE.md](./API_REFERENCE.md).
 
 
 
-**응답 (핵심)**
+### 2.2 `POST /video/analyze` (multipart)
+
+
+
+유저 `user_video` 또는 `video_url` + Form `reference_json`. Phase A에서 rom/rhythm/power/creativity 추출 병렬 후, ROM canonical JSON으로 Phase B 채점. 상세는 [ORCHESTRATOR.md](./ORCHESTRATOR.md) §3.
+
+
+
+**응답 (핵심 — §2.1과 공통 `scores`)**
 
 
 
@@ -178,33 +196,23 @@ flowchart TB
 
   Client[Client]
 
-  subgraph pre [analyze 이전 — metric 담당]
+  ExtractOnce["POST /video/extract"]
 
-    E1[accuracy extract]
+  RefJSON[(reference JSON)]
 
-    E2[creativity extract]
+  AnalyzeUpload["POST /video/analyze"]
 
-    E3[isolation extract]
+  Coord[extract_coordinator]
 
-    E4[power extract]
+  AnalyzeJson["POST /video/analyze/json"]
 
-    E5[rhythm extract]
+  Orch[orchestrator]
 
-    E6[rom extract]
+  Load[JSON 로드·검증]
 
-  end
+  Align[프레임 정렬]
 
-  Store[(metric별 저장 JSON)]
-
-  Analyze["POST /video/analyze"]
-
-  Orch[analyze 오케스트레이터]
-
-  Load[저장 JSON 로드·검증]
-
-  Align[프레임 정렬 time]
-
-  subgraph parallel [asyncio.gather 병렬]
+  subgraph parallel [score 병렬]
 
     A[score_accuracy]
 
@@ -220,23 +228,19 @@ flowchart TB
 
   end
 
-  Merge[scores 병합]
+  Merge[total_score grade]
 
 
 
-  Client --> E1 & E2 & E3 & E4 & E5 & E6
+  Client --> ExtractOnce --> RefJSON
 
-  E1 & E2 & E3 & E4 & E5 & E6 --> Store
+  Client --> AnalyzeUpload --> Coord --> Orch
 
-  Client --> Analyze --> Orch
+  RefJSON --> AnalyzeUpload
 
-  Store --> Load
+  Client --> AnalyzeJson --> Orch
 
-  Orch --> Load --> Align
-
-  Align --> parallel
-
-  parallel --> Merge --> Client
+  Orch --> Load --> Align --> parallel --> Merge --> Client
 
 ```
 
@@ -260,7 +264,9 @@ flowchart TB
 
 
 
-**오케스트레이터에 없는 단계:** 영상 디코딩, MediaPipe, metric별 특성 추출, 스무딩·정규화 파이프라인.
+**orchestrator에 없는 단계:** 영상 디코딩, MediaPipe, metric별 특성 추출 (이들은 `extract_coordinator` 또는 `POST /video/extract`).
+
+**extract_coordinator에 없는 단계:** 프레임 정렬, `score_*`, `total_score`/`grade`.
 
 
 
@@ -276,7 +282,9 @@ flowchart TB
 
 - 입력(`aligned_pairs`, `user_extraction` 등)은 **읽기 전용** — scorer가 변경하지 않는다.
 
-- 하나라도 실패하면 요청 전체 실패 (부분 응답 없음).
+- **`fail_fast=true`:** 하나라도 실패하면 요청 전체 실패.
+
+- **`fail_fast=false` (기본):** 실패 metric 은 `scores.<name>.breakdown.error`, 성공 metric 과 `total_score`(성공분만 평균) 유지.
 
 
 
@@ -298,11 +306,11 @@ flowchart TB
 
 | isolation | `aligned_pairs` |
 
-| rom | `aligned_pairs` |
+| rom | offset 이후 활성 `user_frames`, `ref_frames` (정렬 쌍 아님) |
 
-| power | `user_extraction` (사용자 JSON 전체) |
+| power | `user_extraction` (ROM canonical JSON 전체) |
 
-| rhythm | `user_extraction` |
+| rhythm | `user_extraction`, `ref_extraction` |
 
 
 
@@ -441,18 +449,36 @@ flowchart LR
 
 ---
 
+## 7. 추출 조율 (`extract_coordinator`)
+
+| 항목 | 내용 |
+|------|------|
+| 호출 | `POST /video/analyze` Phase A 만 |
+| 기본 파이프라인 | `rom`, `rhythm`, `power`, `creativity` (병렬, max 4 workers) |
+| canonical | ROM `{base}.json` → Phase B `user_json` |
+| sidecar | `{base}_rhythm.json`, `{base}_power.json`, `{base}_creativity.json` (저장만, 채점 미연동) |
+| ROM `full` 승격 | 채점 metric 에 accuracy/creativity/isolation/power/rhythm 포함 시 자동 |
+
+---
+
 ## 8. 통합 진입점 (`backend1`)
 
 | 역할 | 경로 |
 |------|------|
 | HTTP 시작 | `backend1/main.py` → `uvicorn main:app` |
-| 라우터 | `backend1/routers/video.py` |
-| ROM 구현 | `metrics/rom/domain/domain1/` (`backend1/main.py`에서 `sys.path` 설정 후 import) |
+| 통합 라우터 | `backend1/routers/video.py` (`/video`) |
+| 추출 조율 | `backend1/services/extract_coordinator.py` |
+| 채점 | `backend1/services/orchestrator.py` |
+| ROM 구현 | `metrics/rom/domain/domain1/` (`main.py` → `metrics/rom` on `sys.path`) |
+| metric 전용 | `/rhythm`, `/isolation`, `/power` (`main.py` 등록) |
 
 | URL | 설명 |
 |-----|------|
-| `POST /video/analyze` | §2.1 JSON 채점 (오케스트레이터) |
-| `POST /video/extract` | 영상 추출 — ROM `domain1` 위임 |
-| `POST /video/compare` | JSON 2개 비교 (선택) |
+| `POST /video/analyze` | 추출 병렬 → 6 metric 채점 |
+| `POST /video/analyze/json` | §2.1 JSON 채점만 |
+| `POST /video/extract` | ROM `domain1` 추출 (레퍼런스 1회) |
+| `POST /video/compare` | ROM `compute_comparison` (디버그) |
 
-`metrics/rom/main.py`, `metrics/rom/routers/` 는 **제거됨**. ROM 담당은 `domain/domain1` 만 수정.
+`metrics/rom/main.py`, `metrics/rom/routers/` 는 **사용하지 않음**. ROM 수정은 `domain/domain1` 만.
+
+API 필드·응답: [API_REFERENCE.md](./API_REFERENCE.md).

@@ -1,7 +1,8 @@
 # Analyze 오케스트레이터 — 설계·대화 정리·구현 현황
 
-> 작성일: 2026-05-21  
+> 작성일: 2026-05-21 (최종 갱신)  
 > 기준: [ARCHITECTURE.md](./ARCHITECTURE.md), [INTEGRATION_STRATEGY.md](./INTEGRATION_STRATEGY.md)  
+> API 필드: [API_REFERENCE.md](./API_REFERENCE.md)  
 > 구현: `backend1/services/orchestrator.py`, `backend1/services/extract_coordinator.py`, `backend1/routers/video.py`
 
 ---
@@ -45,15 +46,15 @@ FOM **accuracy 채점** 구현 위치: `metrics/rom/domain/domain1/hub/services/
 
 ## 2. 배경 문제와 Phase 1 (라우터)
 
-### 2.1 prefix 충돌 (해결됨)
+### 2.1 prefix 충돌 (✅ 해결됨)
 
-이전 `main.py`에서 rhythm 라우터가 `prefix="/video"` 로 먼저 등록되어, 통합 `POST /video/analyze`가 rhythm 핸들러에 가려졌다.
+이전: rhythm `prefix="/video"` 가 통합 `/video/analyze` 를 가림.
 
-**조치:**
+**현재 (`main.py`):**
 
 - `metrics/rhythm/routers/video.py` → `prefix="/rhythm"`
-- `main.py` 등록 순서: `video_router` → `rhythm` / `isolation` / `power`
-- `/health`에 route 메타 추가
+- 등록: `video_router` → `rhythm` → `isolation` → `power`
+- `GET /health` — route 메타
 
 ### 2.2 레거시 ROM 단일 경로
 
@@ -157,8 +158,9 @@ flowchart TB
 ### 4.3 병렬·오류 처리
 
 - `ThreadPoolExecutor(max_workers=6)` + `asyncio.create_task` / `gather`
-- **`fail_fast=False` (기본):** metric 하나 실패 시 `scores.<metric>.breakdown.error` 기록, 나머지 계속
-- **`fail_fast=True`:** 첫 예외 시 전체 실패 (ARCHITECTURE 권장 기본값과 문서상 선택 가능)
+- **`fail_fast=False` (기본, 라우터·`AnalyzeJsonRequest` 동일):** metric 실패 시 `scores.<metric>.breakdown.error`, 나머지 계속
+- **`fail_fast=True`:** 첫 예외 시 HTTP 500
+- **`total_score`:** `breakdown.error` 없는 metric `score` 의 **단순 평균** (`METRIC_WEIGHTS` 는 코드에만 존재, 미적용)
 
 ### 4.4 검증
 
@@ -197,25 +199,33 @@ multipart `analyze`의 Form `metrics`는 쉼표 구분 문자열 (`accuracy,crea
 
 향후: metric별 artifact 경로를 오케스트레이터에 넘기도록 확장 (ARCHITECTURE §2.1 주석).
 
-### 5.3 미포함
+### 5.3 `pipelines` (코드만, HTTP 미노출)
 
-- **isolation 추출** (YOLO, 스키마 상이) — 파이프라인 목록에 없음. isolation **채점**은 ROM JSON의 포즈 필드로 `score_isolation` 시도.
+`run_user_extractions_parallel(pipelines=[...])` 로 파이프라인 subset 가능. 라우터는 아직 Form `pipelines` 를 넘기지 않음 — 항상 `DEFAULT_EXTRACT_PIPELINES`.
+
+### 5.4 미포함
+
+- **isolation 추출** (YOLO) — 파이프라인 목록에 없음. isolation **채점**은 ROM JSON 포즈로 `score_isolation` 시도.
 
 ---
 
 ## 6. API·라우트 현황
+
+전체 필드·응답: [API_REFERENCE.md](./API_REFERENCE.md).
 
 | 메서드 | URL | 추출 | 채점 |
 |--------|-----|------|------|
 | `POST` | `/video/extract` | ROM | — |
 | `POST` | `/video/analyze` | extract_coordinator | orchestrator |
 | `POST` | `/video/analyze/json` | — | orchestrator |
-| `POST` | `/video/compare` | — | ROM 비교 (개발·디버그) |
+| `POST` | `/video/compare` | — | ROM `compute_comparison` (6-metric과 별도) |
+| `GET` | `/video/json/{filename}`, `/video/data/{filename}` | — | — |
 | `POST` | `/rhythm/*` | rhythm 전용 | rhythm 전용 |
 | `POST` | `/isolation/*` | isolation 전용 | isolation 전용 |
 | `POST` | `/power/*` | power 전용 | power 전용 |
+| `GET` | `/health` | — | — |
 
-**creativity HTTP API 없음** — 통합 채점만 `score_creativity(aligned_pairs)` 경로.
+**creativity / accuracy HTTP 없음** — 통합 `score_creativity` / ROM `score_accuracy` 만.
 
 ---
 
@@ -262,7 +272,8 @@ backend1/
 │       └── rom_scorer.py            # score_rom
 └── metrics/docs/
     ├── ARCHITECTURE.md              # 규범 (6인 1서비스, 추출/채점 경계)
-    ├── INTEGRATION_STRATEGY.md        # 통합 전략·Phase 설계
+    ├── INTEGRATION_STRATEGY.md      # Phase 완료 현황·백로그
+    ├── API_REFERENCE.md             # HTTP 필드·응답
     └── ORCHESTRATOR.md              # 본 문서
 ```
 

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from services.orchestrator import run_analyze_from_json
 from services.extract_coordinator import run_user_extractions_parallel
+from services.llm_feedback import get_llm_feedback_service
 from domain.domain1.hub.services.extraction_pipeline import (
     build_reference_meta,
     run_extraction_and_save,
@@ -24,6 +25,7 @@ from domain.domain1.hub.services.storage_paths import (
     validate_filename,
     video_path,
 )
+from domain.domain1.hub.services.comparison_service import compute_comparison
 from domain.domain1.models.transfer.compare_request import CompareRequest
 
 router = APIRouter(prefix="/video", tags=["video"])
@@ -83,6 +85,88 @@ def _parse_metrics_form(metrics: Optional[str]) -> Optional[list[str]]:
     return [m.strip() for m in metrics.split(",") if m.strip()]
 
 
+async def _run_video_analyze_pipeline(
+    video_path: str,
+    reference_json: str,
+    *,
+    reference_video_filename: Optional[str] = None,
+    user_server_video_filename: Optional[str] = None,
+    alignment_method: str,
+    user_offset_sec: float,
+    ref_offset_sec: float,
+    auto_detect_start: bool,
+    detail_level: str,
+    scoring_mode: str,
+    extraction_mode: str,
+    target_fps: Optional[float],
+    frame_stride: Optional[int],
+    metrics_list: Optional[list[str]],
+    enable_accuracy: bool,
+    enable_rom: bool,
+    fail_fast: bool,
+) -> dict:
+    from services.orchestrator import resolve_metrics_list
+
+    effective_target = target_fps if target_fps and target_fps > 0 else None
+    scoring_metrics = resolve_metrics_list(
+        metrics_list,
+        enable_accuracy=enable_accuracy,
+        enable_rom=enable_rom,
+    )
+
+    extract_result = await run_user_extractions_parallel(
+        video_path,
+        scoring_metrics=scoring_metrics,
+        extraction_mode=extraction_mode,
+        target_fps=effective_target,
+        frame_stride=frame_stride,
+        fail_fast=fail_fast,
+    )
+
+    score_result = await run_analyze_from_json(
+        extract_result["canonical_json"],
+        reference_json,
+        alignment_method=alignment_method,
+        user_offset_sec=user_offset_sec,
+        ref_offset_sec=ref_offset_sec,
+        auto_detect_start=auto_detect_start,
+        detail_level=detail_level,
+        scoring_mode=scoring_mode,
+        metrics=metrics_list,
+        enable_accuracy=enable_accuracy,
+        enable_rom=enable_rom,
+        fail_fast=fail_fast,
+    )
+
+    user_public = {
+        "extraction_id": extract_result["user"].get("extraction_id"),
+        "extraction_json": extract_result["user"].get("extraction_json"),
+        "annotated_video": extract_result["user"].get("annotated_video"),
+        "fps": extract_result["user"].get("fps"),
+        "total_frames": extract_result["user"].get("total_frames"),
+    }
+
+    return {
+        "user": user_public,
+        "reference": build_reference_meta(
+            reference_json,
+            reference_video_filename=reference_video_filename,
+        ),
+        "extractions": extract_result.get("extractions"),
+        "alignment": score_result.get("alignment"),
+        "scores": score_result.get("scores"),
+        "meta": {
+            **(score_result.get("meta") or {}),
+            "user_json": extract_result["canonical_json"],
+            "reference_json": reference_json,
+            "user_server_video_filename": user_server_video_filename,
+            "reference_video_filename": reference_video_filename,
+            "rom_extraction_mode": extract_result.get("rom_mode"),
+            "pipelines_run": extract_result.get("pipelines_run"),
+        },
+    }
+
+
 @router.post(
     "/analyze",
     summary="유저 영상 업로드 + 레퍼런스 JSON 채점 (권장)",
@@ -116,8 +200,8 @@ async def analyze_video(
     enable_accuracy: bool = Form(False),
     enable_rom: bool = Form(True),
     extraction_mode: Literal["rom", "full"] = Form(
-        "rom",
-        description="사용자 영상 추출: rom=경량, full=Accuracy용",
+        "full",
+        description="사용자 영상 추출: full=6 metric용(full_v1), rom=경량(rom_v1)",
     ),
     target_fps: Optional[float] = Form(
         15.0,
@@ -135,71 +219,38 @@ async def analyze_video(
         ),
     ),
     fail_fast: bool = Form(False),
+    reference_video_filename: Optional[str] = Form(
+        None,
+        description="전문가 오버레이용 video_data/ MP4 (reference_json과 쌍)",
+    ),
 ):
     tmp_path = None
     try:
         tmp_path, _ = await acquire_video_to_temp(
             upload=user_video, video_url=video_url
         )
-        effective_target = target_fps if target_fps and target_fps > 0 else None
         metrics_list = _parse_metrics_form(metrics)
+        effective_target = target_fps if target_fps and target_fps > 0 else None
 
-        from services.orchestrator import resolve_metrics_list
-
-        scoring_metrics = resolve_metrics_list(
-            metrics_list,
-            enable_accuracy=enable_accuracy,
-            enable_rom=enable_rom,
-        )
-
-        extract_result = await run_user_extractions_parallel(
+        content = await _run_video_analyze_pipeline(
             tmp_path,
-            scoring_metrics=scoring_metrics,
-            extraction_mode=extraction_mode,
-            target_fps=effective_target,
-            frame_stride=frame_stride,
-            fail_fast=fail_fast,
-        )
-
-        score_result = await run_analyze_from_json(
-            extract_result["canonical_json"],
             reference_json,
+            reference_video_filename=reference_video_filename,
             alignment_method=alignment_method,
             user_offset_sec=user_offset_sec,
             ref_offset_sec=ref_offset_sec,
             auto_detect_start=auto_detect_start,
             detail_level=detail_level,
             scoring_mode=scoring_mode,
-            metrics=metrics_list,
+            extraction_mode=extraction_mode,
+            target_fps=effective_target,
+            frame_stride=frame_stride,
+            metrics_list=metrics_list,
             enable_accuracy=enable_accuracy,
             enable_rom=enable_rom,
             fail_fast=fail_fast,
         )
-
-        user_public = {
-            "extraction_id": extract_result["user"].get("extraction_id"),
-            "extraction_json": extract_result["user"].get("extraction_json"),
-            "annotated_video": extract_result["user"].get("annotated_video"),
-            "fps": extract_result["user"].get("fps"),
-            "total_frames": extract_result["user"].get("total_frames"),
-        }
-
-        return JSONResponse(
-            content={
-                "user": user_public,
-                "reference": build_reference_meta(reference_json),
-                "extractions": extract_result.get("extractions"),
-                "alignment": score_result.get("alignment"),
-                "scores": score_result.get("scores"),
-                "meta": {
-                    **(score_result.get("meta") or {}),
-                    "user_json": extract_result["canonical_json"],
-                    "reference_json": reference_json,
-                    "rom_extraction_mode": extract_result.get("rom_mode"),
-                    "pipelines_run": extract_result.get("pipelines_run"),
-                },
-            }
-        )
+        return JSONResponse(content=content)
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
     except httpx.HTTPError as e:
@@ -210,6 +261,86 @@ async def analyze_video(
         raise HTTPException(status_code=500, detail=f"채점 중 오류: {e}") from e
     finally:
         _remove_temp_video(tmp_path)
+
+
+@router.post(
+    "/analyze/by-name",
+    summary="[개발] video_data/ 서버 MP4 + reference_json 채점",
+    description=(
+        "에뮬레이터·로컬 개발용. user_video_filename은 "
+        "metrics/rom/domain/domain1/video_data/ 아래 파일명만 허용. "
+        "기본값: gBR_sBM_c01_d04_mBR3_ch03.mp4 + 20260521_134352_bed9b6d2.json. "
+        "상세: metrics/docs/DEV_VIDEO_DATASET.md"
+    ),
+)
+async def analyze_video_by_name(
+    user_video_filename: str = Form(
+        "gBR_sBM_c01_d04_mBR3_ch03.mp4",
+        description="video_data/ 사용자(개발) MP4 파일명",
+    ),
+    reference_json: str = Form(
+        "20260521_134352_bed9b6d2.json",
+        description="video_json/ 전문가(레퍼런스) 추출 JSON",
+    ),
+    alignment_method: Literal["time", "dtw"] = Form("time"),
+    user_offset_sec: float = Form(0.0),
+    ref_offset_sec: float = Form(0.0),
+    auto_detect_start: bool = Form(True),
+    detail_level: Literal["summary", "full"] = Form("summary"),
+    scoring_mode: Literal["linear", "dance"] = Form("dance"),
+    enable_accuracy: bool = Form(False),
+    enable_rom: bool = Form(True),
+    extraction_mode: Literal["rom", "full"] = Form("full"),
+    target_fps: Optional[float] = Form(15.0),
+    frame_stride: Optional[int] = Form(None),
+    metrics: Optional[str] = Form(None),
+    fail_fast: bool = Form(False),
+    reference_video_filename: Optional[str] = Form(
+        None,
+        description="전문가 오버레이용 MP4. 비우면 user_video_filename과 동일 시도",
+    ),
+):
+    try:
+        validate_filename(user_video_filename)
+        local_path = video_path(user_video_filename)
+        if not local_path.is_file():
+            raise FileNotFoundError(
+                f"video_data에 영상이 없습니다: {user_video_filename}"
+            )
+        ref_video = (reference_video_filename or "").strip() or user_video_filename
+        metrics_list = _parse_metrics_form(metrics)
+        effective_target = target_fps if target_fps and target_fps > 0 else None
+        content = await _run_video_analyze_pipeline(
+            str(local_path),
+            reference_json,
+            reference_video_filename=ref_video,
+            user_server_video_filename=user_video_filename,
+            alignment_method=alignment_method,
+            user_offset_sec=user_offset_sec,
+            ref_offset_sec=ref_offset_sec,
+            auto_detect_start=auto_detect_start,
+            detail_level=detail_level,
+            scoring_mode=scoring_mode,
+            extraction_mode=extraction_mode,
+            target_fps=effective_target,
+            frame_stride=frame_stride,
+            metrics_list=metrics_list,
+            enable_accuracy=enable_accuracy,
+            enable_rom=enable_rom,
+            fail_fast=fail_fast,
+        )
+        content["meta"] = {
+            **(content.get("meta") or {}),
+            "dev_user_video_filename": user_video_filename,
+            "dev_mode": "analyze_by_name",
+        }
+        return JSONResponse(content=content)
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"채점 중 오류: {e}") from e
 
 
 @router.post(
@@ -252,8 +383,8 @@ async def analyze_video_from_json(body: AnalyzeJsonRequest) -> dict:
     summary="영상 추출 (ROM domain1 위임)",
     description=(
         "동영상 file 또는 video_url(HTTP(S)) → 추출 JSON을 video_json/에 저장. "
-        "기본 extraction_mode=rom (15fps 샘플링, annotated MP4 생략). "
-        "Accuracy용은 extraction_mode=full."
+        "기본 extraction_mode=full (full_v1, annotated MP4 생성). "
+        "경량만 필요하면 extraction_mode=rom."
     ),
 )
 async def extract_video(
@@ -357,3 +488,84 @@ def get_extraction_json(filename: str):
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return JSONResponse(content=data)
+
+
+@router.post(
+    "/analyze/feedback",
+    summary="분석 결과 기반 LLM 피드백 생성",
+    description=(
+        "저장된 사용자·전문가 JSON으로 비교 분석 후 LLM 피드백 생성. "
+        "Ollama qwen2.5:7b-instruct-q4_K_M 모델 사용. "
+        "분석 결과 + AI 생성 피드백 반환."
+    ),
+)
+async def generate_analysis_feedback(
+    user_json: str = Form(..., description="저장된 사용자 추출 JSON 파일명"),
+    reference_json: str = Form(..., description="저장된 전문가 추출 JSON 파일명"),
+    alignment_method: Literal["time", "dtw"] = Form("time"),
+    user_offset_sec: float = Form(0.0),
+    ref_offset_sec: float = Form(0.0),
+    auto_detect_start: bool = Form(False),
+    detail_level: Literal["summary", "full"] = Form("summary"),
+    scoring_mode: Literal["linear", "dance"] = Form("dance"),
+    enable_accuracy: bool = Form(True),
+    enable_rom: bool = Form(True),
+    enable_creativity: bool = Form(True),
+    enable_isolation: bool = Form(True),
+    enable_power: bool = Form(True),
+    enable_rhythm: bool = Form(True),
+):
+    """
+    기존 저장된 JSON으로 분석 후 LLM 피드백 생성.
+    """
+    # 1. 비교 분석 실행
+    # metrics 리스트 구성
+    metrics = []
+    if enable_accuracy:
+        metrics.append("accuracy")
+    if enable_rom:
+        metrics.append("rom")
+    if enable_creativity:
+        metrics.append("creativity")
+    if enable_isolation:
+        metrics.append("isolation")
+    if enable_power:
+        metrics.append("power")
+    if enable_rhythm:
+        metrics.append("rhythm")
+    
+    try:
+        analysis_result = await run_analyze_from_json(
+            user_json_filename=user_json,
+            reference_json_filename=reference_json,
+            alignment_method=alignment_method,
+            user_offset_sec=user_offset_sec,
+            ref_offset_sec=ref_offset_sec,
+            auto_detect_start=auto_detect_start,
+            detail_level=detail_level,
+            scoring_mode=scoring_mode,
+            metrics=metrics if metrics else None,
+            enable_accuracy=enable_accuracy,
+            enable_rom=enable_rom,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"분석 중 오류: {e}") from e
+    
+    # 2. LLM 피드백 생성
+    llm_service = get_llm_feedback_service()
+    feedback_result = await llm_service.generate_feedback(analysis_result)
+    
+    return JSONResponse(content={
+        "analysis": {
+            "user_json": analysis_result.get("user_json"),
+            "reference_json": analysis_result.get("reference_json"),
+            "scores": analysis_result.get("scores"),
+            "alignment": analysis_result.get("alignment"),
+            "meta": analysis_result.get("meta"),
+        },
+        "feedback": feedback_result,
+    })

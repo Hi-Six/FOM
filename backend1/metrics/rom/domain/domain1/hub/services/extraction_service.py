@@ -1,3 +1,4 @@
+import math
 import os
 import shutil
 import socket
@@ -95,6 +96,27 @@ DEFAULT_TARGET_FPS_ROM = 15.0
 ExtractionMode = Literal["rom", "full"]
 
 
+def _safe_fps(raw: object, default: float = 30.0) -> float:
+    """OpenCV CAP_PROP_FPS 가 0·NaN 인 경우(에뮬레이터·일부 mp4) 기본값 사용."""
+    try:
+        v = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(v) or v <= 0:
+        return default
+    return v
+
+
+def _safe_frame_count(raw: object) -> int:
+    try:
+        v = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(v) or v < 0:
+        return 0
+    return int(v)
+
+
 def resolve_sample_stride(
     source_fps: float,
     target_fps: Optional[float] = DEFAULT_TARGET_FPS_ROM,
@@ -123,8 +145,8 @@ def _mediapipe_landmark_df(
         raise ValueError(f"영상을 열 수 없습니다: {video_path}")
 
     try:
-        source_fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
-        source_total_frames: int = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        source_fps: float = _safe_fps(cap.get(cv2.CAP_PROP_FPS))
+        source_total_frames: int = _safe_frame_count(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         stride = resolve_sample_stride(source_fps, target_fps, frame_stride)
 
         cols = [
@@ -261,7 +283,10 @@ def _build_frames_from_df(
         normalized_landmarks = _normalize_landmarks(landmarks)
         joint_angles = compute_joint_angles(normalized_landmarks)
 
-        source_idx = int(row["source_frame_index"])
+        raw_idx = row["source_frame_index"]
+        if not math.isfinite(float(raw_idx)):
+            continue
+        source_idx = int(raw_idx)
         frame: Dict[str, object] = {
             "frame_index": seq_i,
             "source_frame_index": source_idx,
@@ -315,6 +340,10 @@ def extract_dance_data(
         frame_stride=frame_stride,
     )
     frames_output = _build_frames_from_df(df, source_fps, mode="full")
+    if not frames_output:
+        raise ValueError(
+            "포즈를 인식한 프레임이 없습니다. 카메라에 전신이 보이도록 다시 촬영해 주세요."
+        )
     meta = _extraction_sampling_meta(
         source_fps, source_total, stride, n_proc, target_fps, frame_stride
     )
@@ -339,6 +368,10 @@ def extract_rom_data(
         frame_stride=frame_stride,
     )
     frames_output = _build_frames_from_df(df, source_fps, mode="rom")
+    if not frames_output:
+        raise ValueError(
+            "포즈를 인식한 프레임이 없습니다. 카메라에 전신이 보이도록 다시 촬영해 주세요."
+        )
     meta = _extraction_sampling_meta(
         source_fps, source_total, stride, n_proc, target_fps, frame_stride
     )

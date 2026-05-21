@@ -1,5 +1,6 @@
 """Power metric 전용 — 영상에서 파워 측정에 필요한 데이터 추출 파이프라인."""
 
+import math
 import urllib.request
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -44,6 +45,16 @@ def _ensure_model() -> str:
     return str(_MODEL_PATH)
 
 
+def _safe_fps(raw: object, default: float = 30.0) -> float:
+    try:
+        v = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(v) or v <= 0:
+        return default
+    return v
+
+
 def extract_power_data(video_path: str) -> dict:
     """
     영상 파일에서 파워 채점에 필요한 데이터를 추출해 dict로 반환.
@@ -62,7 +73,7 @@ def extract_power_data(video_path: str) -> dict:
     if not cap.isOpened():
         raise ValueError(f"영상을 열 수 없습니다: {video_path}")
 
-    fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    fps: float = _safe_fps(cap.get(cv2.CAP_PROP_FPS))
 
     # ── Step 2: MediaPipe Tasks API 랜드마크 추출 ─────────────────────────────
     cols = [

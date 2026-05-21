@@ -76,13 +76,26 @@ def run_extraction_and_save(
     return result
 
 
-def build_reference_meta(reference_json_filename: str) -> Dict[str, Any]:
-    """저장된 레퍼런스 JSON 메타 (파일 존재 검증)."""
+def build_reference_meta(
+    reference_json_filename: str,
+    *,
+    reference_video_filename: Optional[str] = None,
+) -> Dict[str, Any]:
+    """저장된 레퍼런스 JSON 메타 (파일 존재 검증). 선택 시 annotated MP4."""
     path = json_path(reference_json_filename)
     if not path.is_file():
         raise FileNotFoundError(
             f"레퍼런스 추출 JSON을 찾을 수 없습니다: {reference_json_filename}"
         )
-    return {
+    meta: Dict[str, Any] = {
         "extraction_json": build_json_meta(reference_json_filename),
+        "annotated_video": None,
     }
+    if reference_video_filename:
+        from .reference_visualizer import ensure_reference_annotated_video
+
+        meta["annotated_video"] = ensure_reference_annotated_video(
+            reference_json_filename,
+            reference_video_filename,
+        )
+    return meta

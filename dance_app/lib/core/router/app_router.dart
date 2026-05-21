@@ -12,7 +12,10 @@ import '../theme/app_theme.dart';
 CompareSession? _compareSessionFromExtra(Object? extra) {
   if (extra is CompareSession) return extra;
   if (extra is String && extra.isNotEmpty) {
-    return CompareSession(userVideoPath: extra, referenceVideoPath: '');
+    return CompareSession(
+      userVideoPath: extra,
+      referenceJson: '',
+    );
   }
   return null;
 }

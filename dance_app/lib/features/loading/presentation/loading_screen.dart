@@ -5,9 +5,10 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/config/api_config.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../isolation/data/isolation_api.dart';
 import '../../studio/data/compare_session.dart';
 import '../../studio/data/studio_providers.dart';
+import '../../studio/data/video_analyze_api.dart';
+import '../../studio/data/video_analyze_models.dart';
 
 class LoadingScreen extends ConsumerStatefulWidget {
   final CompareSession? session;
@@ -21,10 +22,10 @@ class LoadingScreen extends ConsumerStatefulWidget {
 class _LoadingScreenState extends ConsumerState<LoadingScreen>
     with TickerProviderStateMixin {
   static const _messages = [
-    'YOLO로 댄서 추적 중...',
-    'MediaPipe Heavy 포즈 추출 중...',
-    '기준 영상과 프레임 정렬 중...',
-    'Isolation 점수 계산 중...',
+    '영상 업로드 중...',
+    'ROM·리듬·파워·창의성 추출 중...',
+    '프레임 정렬 중...',
+    '6차원 채점 중...',
   ];
 
   int _msgIndex = 0;
@@ -54,43 +55,122 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
     _progressTimer = Timer.periodic(const Duration(milliseconds: 400), (_) {
       if (!mounted || _error != null) return;
       setState(() {
-        _progress = (_progress + 0.012).clamp(0.05, 0.92);
+        _progress = (_progress + 0.008).clamp(0.05, 0.92);
       });
     });
-    WidgetsBinding.instance.addPostFrameCallback((_) => _runIsolationAnalyze());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _runVideoAnalyze());
   }
 
-  Future<void> _runIsolationAnalyze() async {
+  Future<void> _runVideoAnalyze() async {
     final session = widget.session;
-    if (session == null || session.userVideoPath.isEmpty) {
+    final useDevServer = session?.useDevServerVideo ?? ApiConfig.useDevServerUserVideo;
+
+    if (!useDevServer &&
+        (session == null || session.userVideoPath.isEmpty)) {
       setState(() => _error = '촬영 세션이 없습니다. Studio에서 다시 촬영해 주세요.');
       return;
     }
 
-    ref.read(isolationResultProvider.notifier).state = null;
+    ref.read(videoAnalyzeResultProvider.notifier).state = null;
 
     try {
-      final ready = await IsolationApi.checkReady();
-      if (!ready) {
-        throw IsolationApiException(
-          '서버 기준 데이터(ref.json)가 없습니다.\n'
-          'backend1에서: python -m metrics.isolation.cli extract',
+      final healthy = await VideoAnalyzeApi.checkHealth();
+      if (!healthy) {
+        throw VideoAnalyzeApiException(
+          'backend1 서버에 연결할 수 없습니다.\n'
+          'cd backend1 && uvicorn main:app --host 0.0.0.0 --port 8000',
         );
       }
 
-      final result = await IsolationApi.analyzeVideo(
-        session.userVideoPath,
-        autoDetectStart: true,
-      );
+      final refJson = session?.referenceJson ?? '';
+      final expertAsset = session?.referenceVideoPath ?? '';
+      if (refJson.isEmpty) {
+        setState(() => _error = '레퍼런스 JSON이 없습니다. 홈에서 챌린지를 선택해 주세요.');
+        return;
+      }
+
+      final VideoAnalyzeResult result;
+      if (useDevServer) {
+        final serverMp4 = session?.serverUserVideoFilename ?? '';
+        if (serverMp4.isEmpty) {
+          setState(() => _error = '서버 영상 파일명이 없습니다.');
+          return;
+        }
+        result = await VideoAnalyzeApi.analyzeServerDevVideo(
+          userVideoFilename: serverMp4,
+          referenceJson: refJson,
+          expertVideoDisplayUrl: expertAsset,
+          referenceVideoFilename: serverMp4,
+          userAssetVideoUrl: expertAsset,
+          autoDetectStart: true,
+        );
+      } else {
+        final serverRef = session?.serverUserVideoFilename ?? '';
+        result = await VideoAnalyzeApi.analyzeVideo(
+          userVideoPath: session!.userVideoPath,
+          referenceJson: refJson,
+          expertVideoDisplayUrl: expertAsset,
+          referenceVideoFilename:
+              serverRef.isNotEmpty ? serverRef : null,
+          userAssetVideoUrl: expertAsset,
+          autoDetectStart: true,
+        );
+      }
 
       if (!mounted) return;
-      ref.read(isolationResultProvider.notifier).state = result;
+      final withMedia = result.withPlaybackContext(
+        userLocalVideoPath: useDevServer ? null : session?.userVideoPath,
+        userServerVideoFilename: session?.serverUserVideoFilename,
+        userAssetVideoUrl: expertAsset,
+      );
+      
+      // LLM 피드백 생성 시도
+      String? feedback;
+      String? feedbackError;
+      if (result.userJson != null && result.referenceJson != null) {
+        try {
+          final feedbackData = await VideoAnalyzeApi.generateFeedback(
+            userJson: result.userJson!,
+            referenceJson: result.referenceJson!,
+            alignmentMethod: 'dtw',
+            autoDetectStart: true,
+          );
+          feedback = feedbackData['feedback'] as String?;
+          feedbackError = feedbackData['error'] as String?;
+        } catch (e) {
+          feedbackError = 'LLM 피드백 생성 실패: $e';
+        }
+      }
+      
+      final withFeedback = VideoAnalyzeResult(
+        creativity: withMedia.creativity,
+        rom: withMedia.rom,
+        power: withMedia.power,
+        isolation: withMedia.isolation,
+        rhythm: withMedia.rhythm,
+        accuracy: withMedia.accuracy,
+        totalScore: withMedia.totalScore,
+        grade: withMedia.grade,
+        expertVideoDisplayUrl: withMedia.expertVideoDisplayUrl,
+        userJson: withMedia.userJson,
+        referenceJson: withMedia.referenceJson,
+        rawScores: withMedia.rawScores,
+        expertAnnotatedVideoUrl: withMedia.expertAnnotatedVideoUrl,
+        userAnnotatedVideoUrl: withMedia.userAnnotatedVideoUrl,
+        userServerVideoFilename: withMedia.userServerVideoFilename,
+        userAssetVideoUrl: withMedia.userAssetVideoUrl,
+        userLocalVideoPath: withMedia.userLocalVideoPath,
+        feedback: feedback,
+        feedbackError: feedbackError,
+      );
+      
+      ref.read(videoAnalyzeResultProvider.notifier).state = withFeedback;
       setState(() => _progress = 1.0);
       await Future.delayed(const Duration(milliseconds: 400));
       if (mounted) {
-        context.go('/feedback', extra: session);
+        context.go('/report');
       }
-    } on IsolationApiException catch (e) {
+    } on VideoAnalyzeApiException catch (e) {
       if (mounted) setState(() => _error = e.message);
     } catch (e) {
       if (mounted) {
@@ -98,6 +178,8 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
           _error =
               '분석 요청 실패 (${ApiConfig.baseUrl})\n'
               '${ApiConfig.platformHint}\n'
+              'user: ${useDevServer ? session?.serverUserVideoFilename : session?.userVideoPath}\n'
+              'reference: ${session?.referenceJson}\n'
               '실기기면: flutter run --dart-define=API_BASE_URL=http://<PC_IP>:8000\n'
               '$e';
         });
@@ -121,82 +203,89 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 32),
-          child: _error != null ? _ErrorPanel(
-              message: _error!,
-              onRetry: () {
-                setState(() {
-                  _error = null;
-                  _progress = 0.05;
-                });
-                _runIsolationAnalyze();
-              },
-              onHome: () => context.go('/home'),
-            ) : Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Spacer(flex: 2),
-                _DancingFigure(pulseCtrl: _pulseCtrl, rotateCtrl: _rotateCtrl),
-                const SizedBox(height: 48),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 400),
-                  child: Text(
-                    _messages[_msgIndex],
-                    key: ValueKey(_msgIndex),
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: AppColors.neonGreen,
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  '${ApiConfig.baseUrl}\n${ApiConfig.platformHint}',
-                  textAlign: TextAlign.center,
-                  style: Theme.of(context).textTheme.bodySmall,
-                ),
-                const SizedBox(height: 32),
-                Column(
+          child: _error != null
+              ? _ErrorPanel(
+                  message: _error!,
+                  onRetry: () {
+                    setState(() {
+                      _error = null;
+                      _progress = 0.05;
+                    });
+                    _runVideoAnalyze();
+                  },
+                  onHome: () => context.go('/home'),
+                )
+              : Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        const Text(
-                          'Isolation 분석',
-                          style: TextStyle(
-                            color: AppColors.textSecondary,
-                            fontSize: 12,
-                          ),
+                    const Spacer(flex: 2),
+                    _DancingFigure(
+                      pulseCtrl: _pulseCtrl,
+                      rotateCtrl: _rotateCtrl,
+                    ),
+                    const SizedBox(height: 48),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 400),
+                      child: Text(
+                        _messages[_msgIndex],
+                        key: ValueKey(_msgIndex),
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: AppColors.neonGreen,
+                          fontSize: 18,
+                          fontWeight: FontWeight.w600,
+                          letterSpacing: 0.3,
                         ),
-                        Text(
-                          '${(_progress * 100).toInt()}%',
-                          style: const TextStyle(
-                            color: AppColors.neonGreen,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      '${ApiConfig.baseUrl}\n'
+                      '${ApiConfig.useDevServerUserVideo ? "[dev] ${widget.session?.serverUserVideoFilename}" : widget.session?.userVideoPath ?? ""}\n'
+                      'ref: ${widget.session?.referenceJson ?? ""}',
+                      textAlign: TextAlign.center,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    const SizedBox(height: 32),
+                    Column(
+                      children: [
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            const Text(
+                              '6차원 비교 분석',
+                              style: TextStyle(
+                                color: AppColors.textSecondary,
+                                fontSize: 12,
+                              ),
+                            ),
+                            Text(
+                              '${(_progress * 100).toInt()}%',
+                              style: const TextStyle(
+                                color: AppColors.neonGreen,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(4),
+                          child: LinearProgressIndicator(
+                            value: _progress,
+                            backgroundColor: AppColors.divider,
+                            valueColor: const AlwaysStoppedAnimation(
+                              AppColors.neonGreen,
+                            ),
+                            minHeight: 6,
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 8),
-                    ClipRRect(
-                      borderRadius: BorderRadius.circular(4),
-                      child: LinearProgressIndicator(
-                        value: _progress,
-                        backgroundColor: AppColors.divider,
-                        valueColor: const AlwaysStoppedAnimation(
-                          AppColors.neonGreen,
-                        ),
-                        minHeight: 6,
-                      ),
-                    ),
+                    const Spacer(flex: 3),
                   ],
                 ),
-                const Spacer(flex: 3),
-              ],
-            ),
         ),
       ),
     );
