@@ -10,8 +10,8 @@ pydantic>=2.6.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
 
-# YOLO11 — optional; set use_yolo=True in pipeline config
-# ultralytics>=8.2.0
+YOLO11 — optional; set use_yolo=True in pipeline config
+ultralytics>=8.2.0
 
 
 mediapipe[solutions]>=0.10.14
