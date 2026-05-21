@@ -2,6 +2,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from typing import Dict, List, Literal, Optional, Tuple
 
 from .pose_geometry import (
@@ -9,6 +10,9 @@ from .pose_geometry import (
     compute_bone_vectors,
     compute_joint_angles,
 )
+
+# MediaPipe Tasks API 모델 경로
+_MODEL_PATH = Path(__file__).parent.parent.parent.parent.parent / "models" / "pose_landmarker_full.task"
 
 LANDMARK_NAMES = [
     "nose", "left_eye_inner", "left_eye", "left_eye_outer",
@@ -68,37 +72,48 @@ def _mediapipe_landmark_df(
     raw_rows: List[List[float]] = []
     source_frame_indices: List[int] = []
 
-    pose = mp.solutions.pose.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        smooth_landmarks=True,
-        min_detection_confidence=0.5,
+    # MediaPipe Tasks API (VIDEO 모드)
+    BaseOptions = mp.tasks.BaseOptions
+    PoseLandmarker = mp.tasks.vision.PoseLandmarker
+    PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+    VisionRunningMode = mp.tasks.vision.RunningMode
+
+    options = PoseLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=str(_MODEL_PATH)),
+        running_mode=VisionRunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
     )
 
     frame_idx = 0
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if frame_idx % stride != 0:
-            frame_idx += 1
-            continue
+    with PoseLandmarker.create_from_options(options) as landmarker:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            if frame_idx % stride != 0:
+                frame_idx += 1
+                continue
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
-        if result.pose_landmarks:
-            row: List[float] = []
-            for lm in result.pose_landmarks.landmark:
-                row.extend([lm.x, lm.y, lm.z, lm.visibility])
-            raw_rows.append(row)
-        else:
-            raw_rows.append([np.nan] * len(cols))
-        source_frame_indices.append(frame_idx)
-        frame_idx += 1
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            timestamp_ms = int(frame_idx * 1000 / source_fps)
+            
+            result = landmarker.detect_for_video(mp_image, timestamp_ms)
+            
+            if result.pose_landmarks and len(result.pose_landmarks) > 0:
+                row: List[float] = []
+                for lm in result.pose_landmarks[0]:
+                    row.extend([lm.x, lm.y, lm.z, lm.visibility])
+                raw_rows.append(row)
+            else:
+                raw_rows.append([np.nan] * len(cols))
+            source_frame_indices.append(frame_idx)
+            frame_idx += 1
 
     cap.release()
-    pose.close()
 
     if not raw_rows:
         raise ValueError("영상에서 처리할 프레임이 없습니다.")

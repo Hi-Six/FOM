@@ -58,14 +58,14 @@ ROM metric 담당 코드는 **`domain/domain1`만** 수정하는 것을 전제�
 
 | 라이브러리 | 버전(요구) | ROM에서의 역할 |
 |------------|------------|----------------|
-| **MediaPipe Pose** | `mediapipe>=0.10.14,<0.10.30` | 33 body landmarks 추정 (`mp.solutions.pose`) |
+| **MediaPipe Tasks** | `mediapipe>=0.10.31,<0.11` | Pose Landmarker로 33 body landmarks 추정 (`mp.tasks.vision.PoseLandmarker`) |
 | **OpenCV** | `opencv-python>=4.9` | `VideoCapture` 프레임 읽기, (선택) annotated MP4 작성 |
 | **NumPy** | ≥1.26 | 벡터·각도·정규화 연산 |
 | **pandas** | ≥2.2 | 랜드마크 시계열 보간·rolling 스무딩 |
 | **SciPy** | ≥1.12 | DTW 거리 (`euclidean`) — Accuracy 정렬 시 |
 | **fastdtw** | ≥0.3.4 | `joint_angles` 시퀀스 DTW 정렬 — Accuracy 정렬 시 |
 
-> **MediaPipe 0.10.30+:** Solutions API(`mp.solutions.pose`) 제거. 현재 코드는 **0.10.14~0.10.29** 구간을 전제로 함.
+> **MediaPipe 버전:** 0.10.31+부터 Legacy Solutions API(`mp.solutions.pose`)가 제거되어 **Tasks API(`mp.tasks.vision.PoseLandmarker`)** 를 사용합니다. 모델 파일(`pose_landmarker_full.task`)은 별도 다운로드 필요.
 
 ### 3.3 ROM 기본 경로에서 쓰지 않는 것
 
@@ -84,7 +84,7 @@ ROM metric 담당 코드는 **`domain/domain1`만** 수정하는 것을 전제�
 ```
 동영상 (mp4/mov/avi/mkv/webm)
   → OpenCV 프레임 읽기 (+ 샘플링 stride)
-  → MediaPipe Pose (model_complexity=1)
+  → MediaPipe Tasks Pose Landmarker (VIDEO 모드)
   → pandas: NaN 보간 + rolling mean
   → Mid-Hip 원점 + Torso Length 스케일 정규화
   → joint_angles 10관절 (도)
@@ -93,19 +93,31 @@ ROM metric 담당 코드는 **`domain/domain1`만** 수정하는 것을 전제�
 
 구현: `hub/services/extraction_service.py`, `extraction_pipeline.py`
 
-### 4.2 MediaPipe 설정 (고정값)
+### 4.2 MediaPipe Tasks 설정
 
 ```python
-mp.solutions.pose.Pose(
-    static_image_mode=False,
-    model_complexity=1,
-    smooth_landmarks=True,
-    min_detection_confidence=0.5,
+BaseOptions = mp.tasks.BaseOptions
+PoseLandmarker = mp.tasks.vision.PoseLandmarker
+PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+VisionRunningMode = mp.tasks.vision.RunningMode
+
+options = PoseLandmarkerOptions(
+    base_options=BaseOptions(model_asset_path="models/pose_landmarker_full.task"),
+    running_mode=VisionRunningMode.VIDEO,
+    num_poses=1,
+    min_pose_detection_confidence=0.5,
+    min_pose_presence_confidence=0.5,
     min_tracking_confidence=0.5,
 )
+
+with PoseLandmarker.create_from_options(options) as landmarker:
+    # VIDEO 모드: timestamp_ms 필요
+    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+    result = landmarker.detect_for_video(mp_image, timestamp_ms)
 ```
 
-- **model_complexity=1:** 속도·정확도 균형 (0=가벼움, 2=무거움)
+- **모델:** `pose_landmarker_full.task` (float16, ~9.4MB) — `models/` 디렉토리에 배치
+- **VIDEO 모드:** tracking 지원으로 프레임 간 일관성 향상
 - 검출 실패 프레임은 NaN → **선형 보간 + ffill/bfill**
 
 ### 4.3 좌표 정규화 (시점·체형 보정)
@@ -321,4 +333,4 @@ Swagger: `http://localhost:8000/docs` → `POST /video/analyze` (multipart).
 
 ---
 
-**요약:** ROM metric은 **MediaPipe + OpenCV + NumPy/pandas** 로 포즈를 뽑고, **정규화 관절 각도 시퀀스의 min/max** 로 가동 범위를 정의한 뒤, **레퍼런스 대비 커버리지 평균**으로 점수를 낸다. **FastAPI**로 노출하며, 기본 운영은 **`rom_v1`·15fps·ROM-only 채점** 이다.
+**요약:** ROM metric은 **MediaPipe Tasks Pose Landmarker + OpenCV + NumPy/pandas** 로 포즈를 뽑고, **정규화 관절 각도 시퀀스의 min/max** 로 가동 범위를 정의한 뒤, **레퍼런스 대비 커버리지 평균**으로 점수를 낸다. **FastAPI**로 노출하며, 기본 운영은 **`rom_v1`·15fps·ROM-only 채점** 이다. MediaPipe 0.10.31+ Tasks API를 사용하며 `pose_landmarker_full.task` 모델 파일이 필요하다.

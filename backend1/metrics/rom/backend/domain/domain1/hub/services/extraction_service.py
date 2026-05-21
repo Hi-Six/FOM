@@ -2,8 +2,12 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import pandas as pd
+from pathlib import Path
 from typing import Dict, List, Optional
 from .pose_geometry import compute_bone_vectors, compute_joint_angles
+
+# MediaPipe Tasks API 모델 경로
+_MODEL_PATH = Path(__file__).parent.parent.parent.parent.parent.parent / "models" / "pose_landmarker_full.task"
 
 # MediaPipe의 33개 랜드마크 이름 매핑
 LANDMARK_NAMES = [
@@ -43,31 +47,44 @@ def extract_dance_data(video_path: str) -> dict:
     cols = [f"{name}_{coord}" for name in LANDMARK_NAMES for coord in ("x", "y", "z", "vis")]
     raw_rows: List[Optional[List[float]]] = []
 
-    pose = mp.solutions.pose.Pose(
-        static_image_mode=False,
-        model_complexity=1,
-        smooth_landmarks=True,
-        min_detection_confidence=0.5,
+    # MediaPipe Tasks API (VIDEO 모드)
+    BaseOptions = mp.tasks.BaseOptions
+    PoseLandmarker = mp.tasks.vision.PoseLandmarker
+    PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+    VisionRunningMode = mp.tasks.vision.RunningMode
+
+    options = PoseLandmarkerOptions(
+        base_options=BaseOptions(model_asset_path=str(_MODEL_PATH)),
+        running_mode=VisionRunningMode.VIDEO,
+        num_poses=1,
+        min_pose_detection_confidence=0.5,
+        min_pose_presence_confidence=0.5,
         min_tracking_confidence=0.5,
     )
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        result = pose.process(rgb)
-        if result.pose_landmarks:
-            row: List[float] = []
-            for lm in result.pose_landmarks.landmark:
-                row.extend([lm.x, lm.y, lm.z, lm.visibility])
-            raw_rows.append(row)
-        else:
-            # 랜드마크 미검출 → NaN 행 삽입 (보간 대상)
-            raw_rows.append([np.nan] * len(cols))
+    frame_idx = 0
+    with PoseLandmarker.create_from_options(options) as landmarker:
+        while True:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+            timestamp_ms = int(frame_idx * 1000 / fps)
+            
+            result = landmarker.detect_for_video(mp_image, timestamp_ms)
+            
+            if result.pose_landmarks and len(result.pose_landmarks) > 0:
+                row: List[float] = []
+                for lm in result.pose_landmarks[0]:
+                    row.extend([lm.x, lm.y, lm.z, lm.visibility])
+                raw_rows.append(row)
+            else:
+                # 랜드마크 미검출 → NaN 행 삽입 (보간 대상)
+                raw_rows.append([np.nan] * len(cols))
+            frame_idx += 1
 
     cap.release()
-    pose.close()
 
     # ── Step 3: 보간 + 이동평균 스무딩 ─────────────────────────────────────
     df = pd.DataFrame(raw_rows, columns=cols)
