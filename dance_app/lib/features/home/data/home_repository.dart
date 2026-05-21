@@ -24,8 +24,8 @@ class HomeRepository {
   static const _mockVideos = [
     DanceVideo(
       id: '1',
-      title: '팝핑 기초',
-      genre: '팝핑',
+      title: '정확도',
+      genre: '정확도',
       difficulty: '초급',
       thumbnailUrl: '',
       videoUrl: '',
