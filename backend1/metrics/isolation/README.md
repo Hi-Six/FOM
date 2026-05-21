@@ -2,8 +2,8 @@
 
 ## 팀 MediaPipe (병합 기준)
 
-- `mediapipe==0.10.30` + **Tasks API** (`mediapipe_pose_tasks.py`)
-- `feature_creativity` / `feature_power`(legacy)와 병합 시 `requirements.txt`는 **0.10.30 단일 pin**으로 맞출 것
+- **Tasks API** + `mediapipe>=0.10.31` (`mediapipe_pose_tasks.py`)
+- **0.10.30은 Windows/Python 3.12에서 사용 불가** (`function 'free' not found`) → **0.10.31 이상**
 
 ## Git에 올리지 않는 것
 
@@ -34,7 +34,12 @@ python -m metrics.isolation.cli extract   # → data/artifacts/ref.json (API 필
 ```powershell
 cd backend1
 python -m metrics.isolation.cli extract   # ref.json
-python -m metrics.isolation.cli run --user-video metrics/isolation/data/raw/user.mp4
+
+# 사용자 영상 → 터미널에 점수 JSON
+python -m metrics.isolation.cli run --user-video metrics/isolation/data/raw/user.mp4 --json
+
+# ref/user JSON 만 있을 때 (extract 생략)
+python -m metrics.isolation.cli score --user metrics/isolation/data/artifacts/user.json --json
 ```
 
 ## HTTP (프론트 연동)

@@ -165,6 +165,33 @@ def _score_output_payload(result: dict, include_frame_diffs: bool) -> dict:
     return {k: v for k, v in result.items() if k != "frame_diffs"}
 
 
+def _cli_log(msg: str, *, json_mode: bool) -> None:
+    """--json 일 때 진행 메시지는 stderr, 최종 점수 JSON만 stdout."""
+    print(msg, file=sys.stderr if json_mode else sys.stdout)
+
+
+def _emit_score_result(result: dict, args: argparse.Namespace) -> None:
+    payload = _score_output_payload(result, getattr(args, "include_frame_diffs", False))
+    json_mode = getattr(args, "json", False)
+
+    if json_mode:
+        print(json.dumps(payload, ensure_ascii=False, indent=2))
+    elif not getattr(args, "quiet", False):
+        print(f"isolation score: {result['score']}")
+        bd = result.get("breakdown", {})
+        if bd.get("mean_user_coupling") is not None:
+            print(
+                f"coupling user={bd.get('mean_user_coupling')} "
+                f"ref={bd.get('mean_ref_coupling')}"
+            )
+
+    out_path = getattr(args, "out", None) or getattr(args, "score_out", None)
+    if out_path:
+        save_json(result if getattr(args, "include_frame_diffs", False) else payload, out_path)
+        if not json_mode and not getattr(args, "quiet", False):
+            print(f"saved: {Path(out_path).resolve()}", file=sys.stderr)
+
+
 def cmd_score(args: argparse.Namespace) -> None:
     """추출 JSON(또는 aligned JSON)만으로 isolation 점수 산출."""
     if args.pairs:
@@ -184,7 +211,7 @@ def cmd_score(args: argparse.Namespace) -> None:
             if not p.is_file():
                 print(f"JSON 없음: {p}", file=sys.stderr)
                 sys.exit(1)
-        if not args.quiet:
+        if not args.quiet and not args.json:
             print(f"score: user={user_json.name} ref={ref_json.name}", file=sys.stderr)
         result = score_from_paths(
             str(user_json),
@@ -196,27 +223,12 @@ def cmd_score(args: argparse.Namespace) -> None:
             auto_detect_start=args.auto_detect_start,
         )
 
-    payload = _score_output_payload(result, args.include_frame_diffs)
-
-    if args.json:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
-    elif not args.quiet:
-        print(f"isolation score: {result['score']}")
-        bd = result.get("breakdown", {})
-        if bd.get("mean_user_coupling") is not None:
-            print(
-                f"coupling user={bd.get('mean_user_coupling')} "
-                f"ref={bd.get('mean_ref_coupling')}"
-            )
-
-    if args.out:
-        save_json(result if args.include_frame_diffs else payload, args.out)
-        if not args.quiet and not args.json:
-            print(f"saved: {Path(args.out).resolve()}", file=sys.stderr)
+    _emit_score_result(result, args)
 
 
 def cmd_run(args: argparse.Namespace) -> None:
     """user mp4 → (tracks) → extract → align → score 한 번에."""
+    jout = args.json
     user_video = Path(args.user_video)
     ref_json = Path(args.ref_json)
     user_json = Path(args.user_json)
@@ -234,7 +246,7 @@ def cmd_run(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if not args.skip_extract:
-        print("=== extract user ===")
+        _cli_log("=== extract user ===", json_mode=jout)
         tracks_arg = user_tracks if user_tracks.is_file() else None
         extract_and_save(
             user_video,
@@ -244,12 +256,11 @@ def cmd_run(args: argparse.Namespace) -> None:
             progress_every=args.progress_every,
             device=args.device,
         )
-        print(f"  → {user_json}")
+        _cli_log(f"  → {user_json}", json_mode=jout)
 
     aligned_path = Path(args.aligned_out)
-    score_path = Path(args.score_out)
 
-    print("=== align ===")
+    _cli_log("=== align ===", json_mode=jout)
     align_and_save(
         user_json,
         ref_json,
@@ -258,15 +269,15 @@ def cmd_run(args: argparse.Namespace) -> None:
         ref_offset_sec=args.ref_offset,
         auto_detect_start=args.auto_detect_start,
     )
-    print(f"  → {aligned_path}")
+    _cli_log(f"  → {aligned_path}", json_mode=jout)
 
-    print("=== score ===")
+    _cli_log("=== score ===", json_mode=jout)
     aligned_data = json.loads(aligned_path.read_text(encoding="utf-8"))
     result = score_from_alignment(aligned_data)
-    save_json(result, score_path)
+    if isinstance(result, dict) and "alignment" not in result:
+        result["alignment"] = aligned_data.get("alignment")
 
-    print(f"  isolation score: {result['score']}")
-    print(f"  → {score_path.resolve()}")
+    _emit_score_result(result, args)
 
 
 def main() -> None:
@@ -346,6 +357,17 @@ def main() -> None:
     p_run.add_argument("--skip-extract", action="store_true")
     p_run.add_argument("--device", default=None)
     p_run.add_argument("--progress-every", type=int, default=50)
+    p_run.add_argument(
+        "--json",
+        action="store_true",
+        help="최종 isolation 점수를 stdout 에 JSON 으로 출력 (진행 로그는 stderr)",
+    )
+    p_run.add_argument(
+        "--include-frame-diffs",
+        action="store_true",
+        help="JSON 에 frame_diffs 포함",
+    )
+    p_run.add_argument("--quiet", action="store_true", help="--json 아닐 때 요약만 최소 출력")
     _add_align_flags(p_run)
     p_run.set_defaults(func=cmd_run)
 
