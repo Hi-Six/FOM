@@ -1,0 +1,27 @@
+# IDE
+.idea/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+*.egg-info/
+
+# ML weights (Ultralytics / MediaPipe 등 — 첫 실행 시 자동 다운로드)
+*.pt
+*.task
+*.tflite
+*.onnx
+
+# Isolation — 영상·추출 JSON (로컬/CI에서 생성)
+backend1/metrics/isolation/data/raw/*
+!backend1/metrics/isolation/data/raw/.gitignore
+!backend1/metrics/isolation/data/raw/.gitkeep
+
+backend1/metrics/isolation/data/artifacts/*
+!backend1/metrics/isolation/data/artifacts/.gitkeep
+
+backend1/metrics/isolation/data/models/*
+!backend1/metrics/isolation/data/models/.gitignore
+!backend1/metrics/isolation/data/models/.gitkeep

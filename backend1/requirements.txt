@@ -3,18 +3,19 @@ numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.12.0
 opencv-python>=4.9.0
-mediapipe>=0.10.14
 pydantic>=2.6.0
+
+# MediaPipe Tasks API — 팀 통일: 0.10.30 (solutions 없음, Pose Landmarker .task)
+mediapipe==0.10.30
 
 # API (optional local server)
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
-httpx>=0.27.0 
+python-multipart>=0.0.9
 
-YOLO11 — optional; set use_yolo=True in pipeline config
-ultralytics>=8.3.0
+# YOLO11 track (isolation pipeline/tracker.py)
+ultralytics>=8.2.0
+lap>=0.5.12
 
-
-mediapipe[solutions]>=0.10.14
-
-librosa>=0.10.0
+# isolation — 기준 영상 다운로드
+yt-dlp>=2024.1.0

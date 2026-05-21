@@ -1,8 +1,10 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/neon_badge.dart';
+import '../../studio/data/studio_providers.dart';
 
 class FeedbackScreen extends StatefulWidget {
   final String? videoPath;
@@ -85,34 +87,7 @@ class _FeedbackScreenState extends State<FeedbackScreen>
               onChanged: (v) => setState(() => _timelinePos = v),
             ),
             const SizedBox(height: 24),
-            // Score indicators
-            Row(
-              children: [
-                Expanded(
-                  child: _ScoreCircle(
-                    label: '리듬\n정확도',
-                    value: 0.85,
-                    color: AppColors.neonGreen,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _ScoreCircle(
-                    label: '포즈\n일치도',
-                    value: 0.90,
-                    color: AppColors.neonPurple,
-                  ),
-                ),
-                const SizedBox(width: 16),
-                Expanded(
-                  child: _ScoreCircle(
-                    label: '종합\n점수',
-                    value: 0.87,
-                    color: AppColors.neonBlue,
-                  ),
-                ),
-              ],
-            ),
+            _IsolationScoreSection(),
             const SizedBox(height: 24),
             // Mistake list
             _MistakeList(),
@@ -385,15 +360,62 @@ class _TimelineBar extends StatelessWidget {
   }
 }
 
+class _IsolationScoreSection extends ConsumerWidget {
+  const _IsolationScoreSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final result = ref.watch(isolationResultProvider);
+    if (result == null) {
+      return const Text(
+        'Isolation 점수 없음 — Studio에서 분석을 다시 실행해 주세요.',
+        textAlign: TextAlign.center,
+      );
+    }
+
+    final score = result.score;
+    final coupling = result.couplingSummary;
+    final transitions = result.breakdown['scored_transitions'];
+
+    return Column(
+      children: [
+        _ScoreCircle(
+          label: 'Isolation\n(부위 독립성)',
+          value: result.scoreNormalized,
+          color: AppColors.neonGreen,
+          scoreText: '${score.toStringAsFixed(1)}점',
+        ),
+        if (coupling != null) ...[
+          const SizedBox(height: 12),
+          Text(
+            coupling,
+            style: Theme.of(context).textTheme.bodySmall,
+            textAlign: TextAlign.center,
+          ),
+        ],
+        if (transitions != null) ...[
+          const SizedBox(height: 4),
+          Text(
+            '분석 구간: $transitions transitions',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ],
+    );
+  }
+}
+
 class _ScoreCircle extends StatelessWidget {
   final String label;
   final double value;
   final Color color;
+  final String? scoreText;
 
   const _ScoreCircle({
     required this.label,
     required this.value,
     required this.color,
+    this.scoreText,
   });
 
   @override
@@ -407,6 +429,15 @@ class _ScoreCircle extends StatelessWidget {
       ),
       child: Column(
         children: [
+          if (scoreText != null)
+            Text(
+              scoreText!,
+              style: TextStyle(
+                color: color,
+                fontSize: 22,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
           SizedBox(
             width: 64,
             height: 64,
