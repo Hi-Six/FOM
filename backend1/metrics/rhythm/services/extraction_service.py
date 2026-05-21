@@ -78,10 +78,17 @@ def extract_rhythm_data(video_path: str) -> Dict[str, Any]:
 
     for fi, pts in enumerate(filled):
         norm = _normalize(pts)
+        # 시각화용 원본 화면 좌표 (MediaPipe [0,1] 이미지 공간)
+        raw_lm = {
+            name: {"x": pts[name]["x"], "y": pts[name]["y"]}
+            for name in ("left_wrist", "right_wrist", "left_ankle", "right_ankle")
+            if name in pts
+        }
         frames_output.append({
             "frame_index": fi,
             "time_sec": round(fi / fps, 4),
             "normalized_landmarks": norm,
+            "raw_landmarks": raw_lm,
         })
 
     return {"fps": fps, "total_frames": len(frames_output), "frames": frames_output}

@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from routers.video import router as video_router
+from metrics.rhythm.routers.video import router as video_router
 
 app = FastAPI(
     title="FOM — Rhythm Scoring API",

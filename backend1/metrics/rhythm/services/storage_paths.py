@@ -55,3 +55,11 @@ def build_json_meta(filename: str) -> dict:
         "relative_path": f"video_data/video_json/{filename}",
         "url": f"/video/json/{filename}",
     }
+
+
+def build_annotated_video_meta(filename: str) -> dict:
+    return {
+        "filename": filename,
+        "relative_path": f"video_data/{filename}",
+        "url": f"/video/video-data/{filename}",
+    }
