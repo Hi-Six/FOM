@@ -1,4 +1,4 @@
-# domain1 — video extraction & talent scoring
+# domain1 — video extraction & scoring (ROM sub-package; backend1/requirements.txt 와 동기)
 numpy>=1.26.0
 pandas>=2.2.0
 scipy>=1.12.0
@@ -10,6 +10,7 @@ pydantic>=2.6.0
 # API (optional local server)
 fastapi>=0.110.0
 uvicorn[standard]>=0.27.0
+httpx>=0.27.0
 
 # YOLO11 — optional; set use_yolo=True in pipeline config
 # ultralytics>=8.2.0
