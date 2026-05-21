@@ -1,33 +1,359 @@
-from typing import Literal
+"""
+통합 /video API — HTTP 진입점.
+구현: metrics/rom/domain/domain1 (ROM metric, ARCHITECTURE.md §1).
+"""
 
-from fastapi import APIRouter, HTTPException
+import os
+import time
+from typing import Literal, Optional
+
+import httpx
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
+
+from services.orchestrator import run_analyze_from_json
+from services.extract_coordinator import run_user_extractions_parallel
+from domain.domain1.hub.services.extraction_pipeline import (
+    build_reference_meta,
+    run_extraction_and_save,
+)
+from domain.domain1.hub.services.video_input import acquire_video_to_temp
+from domain.domain1.hub.services.storage_paths import (
+    load_extraction_json,
+    validate_filename,
+    video_path,
+)
+from domain.domain1.models.transfer.compare_request import CompareRequest
 
 router = APIRouter(prefix="/video", tags=["video"])
 
 
-class AnalyzeRequest(BaseModel):
-    user_json: str = Field(..., description="사용자 추출 JSON 파일명")
-    reference_json: str = Field(..., description="레퍼런스 추출 JSON 파일명")
-    alignment_method: Literal["time"] = Field(
-        default="time",
-        description="프레임 정렬 방식",
+def _remove_temp_video(path: Optional[str]) -> None:
+    """업로드 임시 mp4 삭제 (Windows: VideoCapture 해제 대기)."""
+    if not path or not os.path.exists(path):
+        return
+    for attempt in range(5):
+        try:
+            os.remove(path)
+            return
+        except PermissionError:
+            if attempt < 4:
+                time.sleep(0.15 * (attempt + 1))
+            else:
+                pass
+
+
+class AnalyzeJsonRequest(BaseModel):
+    """ARCHITECTURE.md §2.1 — 저장된 추출 JSON 2개로 채점 (영상 업로드 없음)."""
+
+    user_json: str = Field(..., description="video_json/ 사용자 추출 JSON 파일명")
+    reference_json: str = Field(..., description="video_json/ 레퍼런스 추출 JSON 파일명")
+    alignment_method: Literal["time", "dtw"] = Field("time")
+    user_offset_sec: float = Field(0.0, ge=0.0)
+    ref_offset_sec: float = Field(0.0, ge=0.0)
+    auto_detect_start: bool = Field(False)
+    detail_level: Literal["summary", "full"] = Field("summary")
+    scoring_mode: Literal["linear", "dance"] = Field("dance")
+    enable_accuracy: bool = Field(
+        False,
+        description="(metrics 지정 시 무시) 레거시 플래그",
     )
+    enable_rom: bool = Field(
+        True,
+        description="(metrics 지정 시 무시) 레거시 플래그",
+    )
+    metrics: Optional[list[str]] = Field(
+        None,
+        description=(
+            "채점할 metric 목록. None이면 6개 전체: "
+            "accuracy, creativity, isolation, power, rhythm, rom. "
+            "ROM만: [\"rom\"]"
+        ),
+    )
+    fail_fast: bool = Field(
+        False,
+        description="True면 첫 metric 예외 시 전체 실패. False면 해당 metric만 error",
+    )
+
+
+def _parse_metrics_form(metrics: Optional[str]) -> Optional[list[str]]:
+    if not metrics or not str(metrics).strip():
+        return None
+    return [m.strip() for m in metrics.split(",") if m.strip()]
 
 
 @router.post(
     "/analyze",
-    summary="6차원 채점 (통합)",
+    summary="유저 영상 업로드 + 레퍼런스 JSON 채점 (권장)",
     description=(
-        "저장된 사용자·레퍼런스 추출 JSON으로 accuracy, creativity, isolation, "
-        "power, rhythm, rom 6개 metric을 병렬 채점합니다."
+        "사용자 동영상: multipart file 또는 video_url(HTTP(S) 직링크) 중 하나. "
+        "reference_json은 video_json/에 미리 저장된 전문가 추출 JSON 파일명입니다. "
+        "Phase A: metric별 추출 병렬(rom/rhythm/power/creativity). "
+        "Phase B: 오케스트레이터 6 metric 채점. "
+        "metrics 생략 시 6개 metric 전체 채점. "
+        "저장 JSON만 채점: POST /video/analyze/json."
     ),
 )
-async def analyze_video(body: AnalyzeRequest) -> dict:
-    """
-    analyze 오케스트레이터(JSON 로드·정렬·6 metric 병렬·병합)는 별도 모듈에서 연결 예정.
-    """
-    raise HTTPException(
-        status_code=501,
-        detail="analyze 오케스트레이터가 아직 연결되지 않았습니다.",
-    )
+async def analyze_video(
+    user_video: Optional[UploadFile] = File(
+        None, description="사용자 댄스 영상 (video_url과 택1)"
+    ),
+    video_url: Optional[str] = Form(
+        None,
+        description="사용자 영상 HTTP(S) URL (user_video와 택1, mp4/mov 등 직링크)",
+    ),
+    reference_json: str = Form(
+        ...,
+        description="video_json/ 레퍼런스 추출 JSON 파일명",
+    ),
+    alignment_method: Literal["time", "dtw"] = Form("time"),
+    user_offset_sec: float = Form(0.0),
+    ref_offset_sec: float = Form(0.0),
+    auto_detect_start: bool = Form(False),
+    detail_level: Literal["summary", "full"] = Form("summary"),
+    scoring_mode: Literal["linear", "dance"] = Form("dance"),
+    enable_accuracy: bool = Form(False),
+    enable_rom: bool = Form(True),
+    extraction_mode: Literal["rom", "full"] = Form(
+        "rom",
+        description="사용자 영상 추출: rom=경량, full=Accuracy용",
+    ),
+    target_fps: Optional[float] = Form(
+        15.0,
+        description="ROM 샘플링 목표 fps. 0 이하면 전체 프레임",
+    ),
+    frame_stride: Optional[int] = Form(
+        None,
+        description="지정 시 target_fps보다 우선",
+    ),
+    metrics: Optional[str] = Form(
+        None,
+        description=(
+            "채점 metric (쉼표 구분). 비우면 6개 전체. "
+            "예: accuracy,creativity,isolation,power,rhythm,rom. ROM만: rom"
+        ),
+    ),
+    fail_fast: bool = Form(False),
+):
+    tmp_path = None
+    try:
+        tmp_path, _ = await acquire_video_to_temp(
+            upload=user_video, video_url=video_url
+        )
+        effective_target = target_fps if target_fps and target_fps > 0 else None
+        metrics_list = _parse_metrics_form(metrics)
+
+        from services.orchestrator import resolve_metrics_list
+
+        scoring_metrics = resolve_metrics_list(
+            metrics_list,
+            enable_accuracy=enable_accuracy,
+            enable_rom=enable_rom,
+        )
+
+        extract_result = await run_user_extractions_parallel(
+            tmp_path,
+            scoring_metrics=scoring_metrics,
+            extraction_mode=extraction_mode,
+            target_fps=effective_target,
+            frame_stride=frame_stride,
+            fail_fast=fail_fast,
+        )
+
+        score_result = await run_analyze_from_json(
+            extract_result["canonical_json"],
+            reference_json,
+            alignment_method=alignment_method,
+            user_offset_sec=user_offset_sec,
+            ref_offset_sec=ref_offset_sec,
+            auto_detect_start=auto_detect_start,
+            detail_level=detail_level,
+            scoring_mode=scoring_mode,
+            metrics=metrics_list,
+            enable_accuracy=enable_accuracy,
+            enable_rom=enable_rom,
+            fail_fast=fail_fast,
+        )
+
+        user_public = {
+            "extraction_id": extract_result["user"].get("extraction_id"),
+            "extraction_json": extract_result["user"].get("extraction_json"),
+            "annotated_video": extract_result["user"].get("annotated_video"),
+            "fps": extract_result["user"].get("fps"),
+            "total_frames": extract_result["user"].get("total_frames"),
+        }
+
+        return JSONResponse(
+            content={
+                "user": user_public,
+                "reference": build_reference_meta(reference_json),
+                "extractions": extract_result.get("extractions"),
+                "alignment": score_result.get("alignment"),
+                "scores": score_result.get("scores"),
+                "meta": {
+                    **(score_result.get("meta") or {}),
+                    "user_json": extract_result["canonical_json"],
+                    "reference_json": reference_json,
+                    "rom_extraction_mode": extract_result.get("rom_mode"),
+                    "pipelines_run": extract_result.get("pipelines_run"),
+                },
+            }
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=422, detail=f"영상 URL 다운로드 오류: {e}") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"채점 중 오류: {e}") from e
+    finally:
+        _remove_temp_video(tmp_path)
+
+
+@router.post(
+    "/analyze/json",
+    summary="저장 JSON 2개로 채점 (ARCHITECTURE §2.1)",
+    description=(
+        "이미 추출·저장된 user_json / reference_json으로만 채점합니다. "
+        "metrics 로 6개 전체 지정 가능: accuracy, creativity, isolation, power, rhythm, rom. "
+        "유저 영상 업로드는 POST /video/analyze 를 사용하세요."
+    ),
+)
+async def analyze_video_from_json(body: AnalyzeJsonRequest) -> dict:
+    try:
+        result = await run_analyze_from_json(
+            body.user_json,
+            body.reference_json,
+            alignment_method=body.alignment_method,
+            user_offset_sec=body.user_offset_sec,
+            ref_offset_sec=body.ref_offset_sec,
+            auto_detect_start=body.auto_detect_start,
+            detail_level=body.detail_level,
+            scoring_mode=body.scoring_mode,
+            metrics=body.metrics,
+            enable_accuracy=body.enable_accuracy,
+            enable_rom=body.enable_rom,
+            fail_fast=body.fail_fast,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"채점 중 오류: {e}") from e
+
+    return result
+
+
+@router.post(
+    "/extract",
+    summary="영상 추출 (ROM domain1 위임)",
+    description=(
+        "동영상 file 또는 video_url(HTTP(S)) → 추출 JSON을 video_json/에 저장. "
+        "기본 extraction_mode=rom (15fps 샘플링, annotated MP4 생략). "
+        "Accuracy용은 extraction_mode=full."
+    ),
+)
+async def extract_video(
+    file: Optional[UploadFile] = File(None, description="업로드 영상 (video_url과 택1)"),
+    video_url: Optional[str] = Form(
+        None,
+        description="영상 HTTP(S) URL (file과 택1)",
+    ),
+    extraction_mode: Literal["rom", "full"] = Form(
+        "rom",
+        description="rom=경량 joint_angles, full=Accuracy용 전체 필드",
+    ),
+    target_fps: Optional[float] = Form(
+        15.0,
+        description="MediaPipe 샘플링 목표 fps (rom 기본 15). 0 이하면 전체 프레임",
+    ),
+    frame_stride: Optional[int] = Form(
+        None,
+        description="지정 시 target_fps보다 우선 (N프레임마다 1회 처리)",
+    ),
+    include_annotated_video: Optional[bool] = Form(
+        None,
+        description="None=rom이면 생략, full이면 생성. True/False로 강제",
+    ),
+):
+    tmp_path = None
+    try:
+        tmp_path, _ = await acquire_video_to_temp(upload=file, video_url=video_url)
+        effective_target = target_fps if target_fps and target_fps > 0 else None
+        result = run_extraction_and_save(
+            tmp_path,
+            mode=extraction_mode,
+            target_fps=effective_target,
+            frame_stride=frame_stride,
+            include_annotated_video=include_annotated_video,
+        )
+        return JSONResponse(content=result)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=422, detail=f"영상 URL 다운로드 오류: {e}") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"추출 중 오류: {e}") from e
+    finally:
+        _remove_temp_video(tmp_path)
+
+
+@router.post(
+    "/compare",
+    summary="저장 JSON 2개 비교·채점 (ROM domain1)",
+    description="video_json/ 파일명 2개. ROM 기본: enable_accuracy=false.",
+)
+async def compare_videos(body: CompareRequest):
+    try:
+        result = compute_comparison(
+            user_json_filename=body.user_json,
+            reference_json_filename=body.reference_json,
+            alignment_method=body.alignment_method,
+            user_offset_sec=body.user_offset_sec,
+            ref_offset_sec=body.ref_offset_sec,
+            auto_detect_start=body.auto_detect_start,
+            detail_level=body.detail_level,
+            scoring_mode=body.scoring_mode,
+            enable_accuracy=body.enable_accuracy,
+            enable_rom=body.enable_rom,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"비교 중 오류: {e}") from e
+    return JSONResponse(content=result)
+
+
+@router.get(
+    "/data/{filename}",
+    summary="분석 오버레이 영상 다운로드",
+    response_class=FileResponse,
+)
+def get_annotated_video(filename: str):
+    try:
+        validate_filename(filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    path = video_path(filename)
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="영상을 찾을 수 없습니다.")
+    return FileResponse(path, media_type="video/mp4", filename=filename)
+
+
+@router.get(
+    "/json/{filename}",
+    summary="저장된 추출 JSON 다운로드",
+)
+def get_extraction_json(filename: str):
+    try:
+        data = load_extraction_json(filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    return JSONResponse(content=data)

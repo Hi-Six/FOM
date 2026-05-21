@@ -437,20 +437,22 @@ flowchart LR
 | analyze 시 영상 추출·MediaPipe 실행 | ❌ | ❌ |
 
 | 6서비스 병렬 호출·결과 병합 | ❌ | ✅ |
-
-| 다른 metric / hub / 라우터 / 타 metric 추출 파이프라인 | ❌ | ❌ (오케스트레이션만) |
-
-
+| 다른 metric / hub / 라우터 | ❌ | ✅ (오케스트레이션만) |
 
 ---
 
+## 8. 통합 진입점 (`backend1`)
 
+| 역할 | 경로 |
+|------|------|
+| HTTP 시작 | `backend1/main.py` → `uvicorn main:app` |
+| 라우터 | `backend1/routers/video.py` |
+| ROM 구현 | `metrics/rom/domain/domain1/` (`backend1/main.py`에서 `sys.path` 설정 후 import) |
 
-## 7. 구현 참고 (현재 코드와의 차이)
+| URL | 설명 |
+|-----|------|
+| `POST /video/analyze` | §2.1 JSON 채점 (오케스트레이터) |
+| `POST /video/extract` | 영상 추출 — ROM `domain1` 위임 |
+| `POST /video/compare` | JSON 2개 비교 (선택) |
 
-
-
-- `metrics/rom/` 등에 **영상 업로드 + 추출 + 비교가 한 엔드포인트**에 묶인 구현이 있을 수 있다. 이는 **ROM 단독 서버 편의**이며, 통합 설계상 **analyze 오케스트레이터의 목표 동작은 §3과 같다** (추출 분리).
-
-- 통합 `backend1`의 `POST /video/analyze`는 **저장 JSON 기준 채점**으로 연결하는 것이 목표이다.
-
+`metrics/rom/main.py`, `metrics/rom/routers/` 는 **제거됨**. ROM 담당은 `domain/domain1` 만 수정.

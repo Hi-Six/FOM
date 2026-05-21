@@ -253,8 +253,15 @@ def render_annotated_video(
     ensure_video_data_dir()
     output_path = VIDEO_DATA_DIR / output_filename
 
+    if extraction_result.get("schema") == "rom_v1":
+        raise ValueError(
+            "rom_v1 추출본은 annotated MP4를 생성하지 않습니다. "
+            "include_annotated_video=True 또는 extraction_mode=full 로 추출하세요."
+        )
+
     frames_data: List[dict] = extraction_result["frames"]
     fps = float(extraction_result.get("fps") or 30.0)
+    stride = int(extraction_result.get("sample_stride") or 1)
 
     cap = cv2.VideoCapture(source_video_path)
     if not cap.isOpened():
@@ -272,6 +279,9 @@ def render_annotated_video(
         raise ValueError("annotated 영상 Writer를 열 수 없습니다 (코덱 mp4v)")
 
     for frame_data in frames_data:
+        src_idx = frame_data.get("source_frame_index")
+        if src_idx is not None:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(src_idx))
         ret, frame = cap.read()
         if not ret:
             break

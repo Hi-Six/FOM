@@ -32,6 +32,10 @@ class CompareRequest(BaseModel):
         default="dance",
         description="linear=기존 선형 각도 감점, dance=구간별 비선형(권장)",
     )
+    enable_accuracy: bool = Field(
+        default=False,
+        description="Accuracy 채점 포함 (full_v1 JSON·bone_vectors 필요)",
+    )
     enable_rom: bool = Field(
         default=True,
         description="ROM(관절 가동 범위) 채점 포함 여부",
