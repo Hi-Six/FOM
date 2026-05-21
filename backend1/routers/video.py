@@ -4,6 +4,7 @@
 """
 
 import os
+import time
 from typing import Literal, Optional
 
 import httpx
@@ -28,6 +29,21 @@ from domain.domain1.models.transfer.compare_request import CompareRequest
 router = APIRouter(prefix="/video", tags=["video"])
 
 
+def _remove_temp_video(path: Optional[str]) -> None:
+    """업로드 임시 mp4 삭제 (Windows: VideoCapture 해제 대기)."""
+    if not path or not os.path.exists(path):
+        return
+    for attempt in range(5):
+        try:
+            os.remove(path)
+            return
+        except PermissionError:
+            if attempt < 4:
+                time.sleep(0.15 * (attempt + 1))
+            else:
+                pass
+
+
 class AnalyzeJsonRequest(BaseModel):
     """ARCHITECTURE.md §2.1 — 저장된 추출 JSON 2개로 채점 (영상 업로드 없음)."""
 
@@ -41,14 +57,18 @@ class AnalyzeJsonRequest(BaseModel):
     scoring_mode: Literal["linear", "dance"] = Field("dance")
     enable_accuracy: bool = Field(
         False,
-        description="Accuracy 채점 (full_v1 JSON 필요). ROM만 쓸 때 False",
+        description="(metrics 지정 시 무시) 레거시 플래그",
     )
-    enable_rom: bool = Field(True, description="ROM 채점 (domain1)")
+    enable_rom: bool = Field(
+        True,
+        description="(metrics 지정 시 무시) 레거시 플래그",
+    )
     metrics: Optional[list[str]] = Field(
         None,
         description=(
-            "채점할 metric 목록. None이면 enable_accuracy/enable_rom 로 결정, "
-            "둘 다 기본이면 6개 전체: accuracy, creativity, isolation, power, rhythm, rom"
+            "채점할 metric 목록. None이면 6개 전체: "
+            "accuracy, creativity, isolation, power, rhythm, rom. "
+            "ROM만: [\"rom\"]"
         ),
     )
     fail_fast: bool = Field(
@@ -71,7 +91,7 @@ def _parse_metrics_form(metrics: Optional[str]) -> Optional[list[str]]:
         "reference_json은 video_json/에 미리 저장된 전문가 추출 JSON 파일명입니다. "
         "Phase A: metric별 추출 병렬(rom/rhythm/power/creativity). "
         "Phase B: 오케스트레이터 6 metric 채점. "
-        "metrics 생략 시 enable_* 또는 6개 전체. "
+        "metrics 생략 시 6개 metric 전체 채점. "
         "저장 JSON만 채점: POST /video/analyze/json."
     ),
 )
@@ -110,8 +130,8 @@ async def analyze_video(
     metrics: Optional[str] = Form(
         None,
         description=(
-            "채점 metric (쉼표 구분). 예: accuracy,creativity,isolation,power,rhythm,rom. "
-            "비우면 enable_accuracy/enable_rom 또는 6개 전체"
+            "채점 metric (쉼표 구분). 비우면 6개 전체. "
+            "예: accuracy,creativity,isolation,power,rhythm,rom. ROM만: rom"
         ),
     ),
     fail_fast: bool = Form(False),
@@ -189,8 +209,7 @@ async def analyze_video(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"채점 중 오류: {e}") from e
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        _remove_temp_video(tmp_path)
 
 
 @router.post(
@@ -279,8 +298,7 @@ async def extract_video(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"추출 중 오류: {e}") from e
     finally:
-        if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+        _remove_temp_video(tmp_path)
 
 
 @router.post(

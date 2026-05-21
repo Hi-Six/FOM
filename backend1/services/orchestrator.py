@@ -290,7 +290,13 @@ def resolve_metrics_list(
     enable_accuracy: bool = False,
     enable_rom: bool = True,
 ) -> List[str]:
-    """요청 metrics 또는 레거시 enable_* 플래그 → 실행 목록."""
+    """
+    요청 metrics → 실행 목록.
+
+    metrics 가 None/비어 있으면 6개 전체(기본).
+    ROM만 등 부분 채점: metrics=["rom"] 등으로 명시.
+    enable_accuracy / enable_rom 은 metrics 미지정 시에는 사용하지 않음(하위 호환용 인자).
+    """
     if metrics:
         invalid = [m for m in metrics if m not in DEFAULT_METRICS]
         if invalid:
@@ -298,14 +304,7 @@ def resolve_metrics_list(
                 f"지원하지 않는 metric: {invalid}. 허용: {list(DEFAULT_METRICS)}"
             )
         return list(metrics)
-    out: List[str] = []
-    if enable_accuracy:
-        out.append("accuracy")
-    if enable_rom:
-        out.append("rom")
-    if not out:
-        out = list(DEFAULT_METRICS)
-    return out
+    return list(DEFAULT_METRICS)
 
 
 async def run_analyze_from_json(

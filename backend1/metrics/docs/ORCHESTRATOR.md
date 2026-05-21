@@ -167,12 +167,13 @@ flowchart TB
 
 ### 4.5 `metrics` 파라미터 해석
 
-| `metrics` | `enable_accuracy` | `enable_rom` | 결과 |
-|-----------|-------------------|--------------|------|
-| `["accuracy","rom",...]` | (무시) | (무시) | 지정 목록만 |
-| `null` / 생략 | `true` | `true` | `accuracy`, `rom` |
-| `null` / 생략 | `false` | `false` | **6개 전체** |
-| `null` / 생략 | `false` | `true` | `rom` 만 (레거시 ROM 전용) |
+| `metrics` | 결과 |
+|-----------|------|
+| `["accuracy","rom",...]` 등 지정 | 지정 목록만 |
+| `null` / 생략 (기본) | **6개 전체** (`accuracy`, `creativity`, `isolation`, `power`, `rhythm`, `rom`) |
+| `rom` (multipart Form) | `rom` 만 |
+
+`enable_accuracy` / `enable_rom` 은 `metrics` 미지정 시 **사용하지 않음**. ROM만 채점: `metrics=rom`.
 
 multipart `analyze`의 Form `metrics`는 쉼표 구분 문자열 (`accuracy,creativity,...`).
 
@@ -224,7 +225,7 @@ multipart `analyze`의 Form `metrics`는 쉼표 구분 문자열 (`accuracy,crea
 2. **유저 (한 번에):** `POST /video/analyze` — 영상 + `reference_json` + (선택) `metrics=accuracy,creativity,isolation,power,rhythm,rom`.
 3. **재채점만:** 동일 user JSON이 이미 있으면 `POST /video/analyze/json` — 파라미터만 바꿔 반복.
 
-**ROM만 빠르게:** `enable_rom=true`, `enable_accuracy=false`, `metrics` 생략 → 채점은 `rom`만 (추출은 여전히 rhythm/power/creativity sidecar까지 돌 수 있음 — 추후 `pipelines` 옵션으로 최적화 가능).
+**ROM만 빠르게:** `metrics=rom` (또는 JSON body `metrics: ["rom"]`). 추출은 여전히 rhythm/power/creativity sidecar까지 돌 수 있음 — 추후 `pipelines` 옵션으로 최적화 가능).
 
 ---
 

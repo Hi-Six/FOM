@@ -1,3 +1,7 @@
+import os
+import shutil
+import socket
+import urllib.request
 import cv2
 import mediapipe as mp
 import numpy as np
@@ -11,8 +15,66 @@ from .pose_geometry import (
     compute_joint_angles,
 )
 
-# MediaPipe Tasks API 모델 경로
-_MODEL_PATH = Path(__file__).parent.parent.parent.parent.parent / "models" / "pose_landmarker_full.task"
+# MediaPipe Tasks API 모델 (power metric과 동일 full task)
+_MODEL_DIR = Path(__file__).parent.parent.parent.parent.parent / "models"
+_MODEL_PATH = _MODEL_DIR / "pose_landmarker_full.task"
+_MODEL_URL = (
+    "https://storage.googleapis.com/mediapipe-models/"
+    "pose_landmarker/pose_landmarker_full/float16/latest/pose_landmarker_full.task"
+)
+_MIN_MODEL_BYTES = 5_000_000
+_MODEL_DOWNLOAD_TIMEOUT_SEC = 120
+
+
+def _runtime_model_file() -> Path:
+    """
+    MediaPipe 네이티브는 Windows에서 non-ASCII 경로(한글 사용자명·OneDrive)에서
+    .task 를 열지 못하는 경우가 많음 → ASCII 전용 디렉터리만 사용.
+    """
+    candidates = (
+        Path("C:/fom_mediapipe_cache"),
+        Path(os.environ.get("PROGRAMDATA", "C:/ProgramData")) / "FOM" / "mediapipe",
+    )
+    for base in candidates:
+        try:
+            base.mkdir(parents=True, exist_ok=True)
+            target = (base / "pose_landmarker_full.task").resolve()
+            if str(target).isascii():
+                return target
+        except OSError:
+            continue
+    raise RuntimeError(
+        "MediaPipe 모델용 ASCII 경로를 만들 수 없습니다. "
+        "C:/fom_mediapipe_cache 쓰기 권한을 확인하세요."
+    )
+
+
+def _ensure_model() -> str:
+    """모델을 ASCII 경로에 다운로드·캐시 후 MediaPipe에 전달."""
+    target = _runtime_model_file()
+    if not target.is_file() or target.stat().st_size < _MIN_MODEL_BYTES:
+        prev = socket.getdefaulttimeout()
+        socket.setdefaulttimeout(_MODEL_DOWNLOAD_TIMEOUT_SEC)
+        try:
+            urllib.request.urlretrieve(_MODEL_URL, target)
+        finally:
+            socket.setdefaulttimeout(prev)
+
+    if not target.is_file() or target.stat().st_size < _MIN_MODEL_BYTES:
+        size = target.stat().st_size if target.is_file() else 0
+        raise RuntimeError(
+            f"pose 모델 다운로드 실패 또는 불완전: {target} (size={size} bytes). "
+            f"URL 수동 다운로드 후 해당 경로에 저장: {_MODEL_URL}"
+        )
+
+    try:
+        _MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        if not _MODEL_PATH.is_file() or _MODEL_PATH.stat().st_size < _MIN_MODEL_BYTES:
+            shutil.copy2(target, _MODEL_PATH)
+    except OSError:
+        pass
+
+    return str(target)
 
 LANDMARK_NAMES = [
     "nose", "left_eye_inner", "left_eye", "left_eye_outer",
@@ -60,60 +122,62 @@ def _mediapipe_landmark_df(
     if not cap.isOpened():
         raise ValueError(f"영상을 열 수 없습니다: {video_path}")
 
-    source_fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    source_total_frames: int = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    stride = resolve_sample_stride(source_fps, target_fps, frame_stride)
+    try:
+        source_fps: float = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        source_total_frames: int = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        stride = resolve_sample_stride(source_fps, target_fps, frame_stride)
 
-    cols = [
-        f"{name}_{coord}"
-        for name in LANDMARK_NAMES
-        for coord in ("x", "y", "z", "vis")
-    ]
-    raw_rows: List[List[float]] = []
-    source_frame_indices: List[int] = []
+        cols = [
+            f"{name}_{coord}"
+            for name in LANDMARK_NAMES
+            for coord in ("x", "y", "z", "vis")
+        ]
+        raw_rows: List[List[float]] = []
+        source_frame_indices: List[int] = []
 
-    # MediaPipe Tasks API (VIDEO 모드)
-    BaseOptions = mp.tasks.BaseOptions
-    PoseLandmarker = mp.tasks.vision.PoseLandmarker
-    PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
-    VisionRunningMode = mp.tasks.vision.RunningMode
+        # MediaPipe Tasks API (VIDEO 모드)
+        BaseOptions = mp.tasks.BaseOptions
+        PoseLandmarker = mp.tasks.vision.PoseLandmarker
+        PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
+        VisionRunningMode = mp.tasks.vision.RunningMode
 
-    options = PoseLandmarkerOptions(
-        base_options=BaseOptions(model_asset_path=str(_MODEL_PATH)),
-        running_mode=VisionRunningMode.VIDEO,
-        num_poses=1,
-        min_pose_detection_confidence=0.5,
-        min_pose_presence_confidence=0.5,
-        min_tracking_confidence=0.5,
-    )
+        model_path = _ensure_model()
+        options = PoseLandmarkerOptions(
+            base_options=BaseOptions(model_asset_path=model_path),
+            running_mode=VisionRunningMode.VIDEO,
+            num_poses=1,
+            min_pose_detection_confidence=0.5,
+            min_pose_presence_confidence=0.5,
+            min_tracking_confidence=0.5,
+        )
 
-    frame_idx = 0
-    with PoseLandmarker.create_from_options(options) as landmarker:
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            if frame_idx % stride != 0:
+        frame_idx = 0
+        with PoseLandmarker.create_from_options(options) as landmarker:
+            while True:
+                ret, frame = cap.read()
+                if not ret:
+                    break
+                if frame_idx % stride != 0:
+                    frame_idx += 1
+                    continue
+
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                timestamp_ms = int(frame_idx * 1000 / source_fps)
+
+                result = landmarker.detect_for_video(mp_image, timestamp_ms)
+
+                if result.pose_landmarks and len(result.pose_landmarks) > 0:
+                    row: List[float] = []
+                    for lm in result.pose_landmarks[0]:
+                        row.extend([lm.x, lm.y, lm.z, lm.visibility])
+                    raw_rows.append(row)
+                else:
+                    raw_rows.append([np.nan] * len(cols))
+                source_frame_indices.append(frame_idx)
                 frame_idx += 1
-                continue
-
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            timestamp_ms = int(frame_idx * 1000 / source_fps)
-            
-            result = landmarker.detect_for_video(mp_image, timestamp_ms)
-            
-            if result.pose_landmarks and len(result.pose_landmarks) > 0:
-                row: List[float] = []
-                for lm in result.pose_landmarks[0]:
-                    row.extend([lm.x, lm.y, lm.z, lm.visibility])
-                raw_rows.append(row)
-            else:
-                raw_rows.append([np.nan] * len(cols))
-            source_frame_indices.append(frame_idx)
-            frame_idx += 1
-
-    cap.release()
+    finally:
+        cap.release()
 
     if not raw_rows:
         raise ValueError("영상에서 처리할 프레임이 없습니다.")
