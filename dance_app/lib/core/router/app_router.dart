@@ -4,8 +4,18 @@ import '../../features/feedback/presentation/feedback_screen.dart';
 import '../../features/home/presentation/home_screen.dart';
 import '../../features/loading/presentation/loading_screen.dart';
 import '../../features/report/presentation/report_screen.dart';
+import '../../features/studio/data/compare_session.dart';
+import '../../features/studio/presentation/studio_record_screen.dart';
 import '../../features/studio/presentation/studio_screen.dart';
 import '../theme/app_theme.dart';
+
+CompareSession? _compareSessionFromExtra(Object? extra) {
+  if (extra is CompareSession) return extra;
+  if (extra is String && extra.isNotEmpty) {
+    return CompareSession(userVideoPath: extra, referenceVideoPath: '');
+  }
+  return null;
+}
 
 final appRouter = GoRouter(
   initialLocation: '/home',
@@ -19,12 +29,24 @@ final appRouter = GoRouter(
       ],
     ),
     GoRoute(
+      path: '/studio/record',
+      builder: (_, _) => const StudioRecordScreen(),
+    ),
+    GoRoute(
       path: '/loading',
-      builder: (_, state) => LoadingScreen(videoPath: state.extra as String?),
+      builder: (_, state) => LoadingScreen(
+        session: _compareSessionFromExtra(state.extra),
+      ),
     ),
     GoRoute(
       path: '/feedback',
-      builder: (_, state) => FeedbackScreen(videoPath: state.extra as String?),
+      builder: (_, state) {
+        final session = _compareSessionFromExtra(state.extra);
+        return FeedbackScreen(
+          videoPath: session?.userVideoPath,
+          referenceVideoPath: session?.referenceVideoPath,
+        );
+      },
     ),
   ],
 );

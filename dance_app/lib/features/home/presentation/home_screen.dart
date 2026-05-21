@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/card_video_preview.dart';
 import '../../../shared/widgets/neon_badge.dart';
+import '../../studio/data/studio_providers.dart';
 import '../data/home_repository.dart';
 
 final homeVideosProvider = FutureProvider<List<DanceVideo>>((ref) {
@@ -48,7 +50,7 @@ class HomeScreen extends ConsumerWidget {
             asyncVideos.when(
               data: (videos) => SliverList(
                 delegate: SliverChildBuilderDelegate(
-                  (context, index) => _VideoCard(video: videos[index]),
+                  (context, index) => _VideoCard(video: videos[index], ref: ref),
                   childCount: videos.length,
                 ),
               ),
@@ -72,8 +74,9 @@ class HomeScreen extends ConsumerWidget {
 
 class _VideoCard extends StatelessWidget {
   final DanceVideo video;
+  final WidgetRef ref;
 
-  const _VideoCard({required this.video});
+  const _VideoCard({required this.video, required this.ref});
 
   Color get _difficultyColor {
     switch (video.difficulty) {
@@ -88,21 +91,18 @@ class _VideoCard extends StatelessWidget {
     }
   }
 
-  String get _genreEmoji {
-    const map = {
-      '팝핑': '⚡',
-      '브레이킹': '🌀',
-      '록킹': '🔒',
-      '왜킹': '👋',
-      '하우스': '🏠',
-    };
-    return map[video.genre] ?? '🎵';
+  String get _durationLabel {
+    final total = video.durationSeconds;
+    return '${total ~/ 60}:${(total % 60).toString().padLeft(2, '0')}';
   }
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: () => _showChallengeSheet(context),
+      onTap: () {
+        ref.read(selectedChallengeProvider.notifier).state = video;
+        _showChallengeSheet(context);
+      },
       child: Container(
         margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
         decoration: BoxDecoration(
@@ -113,29 +113,31 @@ class _VideoCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Thumbnail placeholder
-            Container(
+            SizedBox(
               height: 180,
-              decoration: BoxDecoration(
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [
-                    AppColors.neonPurple.withValues(alpha: 0.3),
-                    AppColors.neonGreen.withValues(alpha: 0.2),
-                    AppColors.background,
-                  ],
-                ),
-              ),
               child: Stack(
+                fit: StackFit.expand,
                 children: [
-                  Center(
-                    child: Text(
-                      _genreEmoji,
-                      style: const TextStyle(fontSize: 64),
+                  if (video.videoUrl.isNotEmpty)
+                    CardVideoPreview(videoUrl: video.videoUrl)
+                  else
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            AppColors.neonPurple.withValues(alpha: 0.3),
+                            AppColors.neonGreen.withValues(alpha: 0.2),
+                            AppColors.background,
+                          ],
+                        ),
+                      ),
+                      child: const Center(
+                        child: Icon(Icons.music_note, color: Colors.white24, size: 64),
+                      ),
                     ),
-                  ),
                   Positioned(
                     right: 12,
                     bottom: 12,
@@ -146,7 +148,7 @@ class _VideoCard extends StatelessWidget {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        '${video.durationSeconds ~/ 60}:${(video.durationSeconds % 60).toString().padLeft(2, '0')}',
+                        _durationLabel,
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 12,
@@ -200,15 +202,16 @@ class _VideoCard extends StatelessWidget {
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
-      builder: (_) => _ChallengeBottomSheet(video: video),
+      builder: (_) => _ChallengeBottomSheet(video: video, ref: ref),
     );
   }
 }
 
 class _ChallengeBottomSheet extends StatelessWidget {
   final DanceVideo video;
+  final WidgetRef ref;
 
-  const _ChallengeBottomSheet({required this.video});
+  const _ChallengeBottomSheet({required this.video, required this.ref});
 
   @override
   Widget build(BuildContext context) {
@@ -233,26 +236,38 @@ class _ChallengeBottomSheet extends StatelessWidget {
           const SizedBox(height: 4),
           Text(video.artist, style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 20),
-          Container(
-            height: 120,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              gradient: LinearGradient(
-                colors: [
-                  AppColors.neonPurple.withValues(alpha: 0.25),
-                  AppColors.neonGreen.withValues(alpha: 0.15),
-                ],
-              ),
-            ),
-            child: const Center(
-              child: Icon(Icons.play_circle_fill, color: AppColors.neonGreen, size: 56),
-            ),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: video.videoUrl.isNotEmpty
+                ? CardVideoPreview(
+                    videoUrl: video.videoUrl,
+                    height: 120,
+                    borderRadius: BorderRadius.circular(12),
+                  )
+                : Container(
+                    height: 120,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(12),
+                      gradient: LinearGradient(
+                        colors: [
+                          AppColors.neonPurple.withValues(alpha: 0.25),
+                          AppColors.neonGreen.withValues(alpha: 0.15),
+                        ],
+                      ),
+                    ),
+                    child: const Center(
+                      child: Icon(Icons.play_circle_fill, color: AppColors.neonGreen, size: 56),
+                    ),
+                  ),
           ),
           const SizedBox(height: 24),
           SizedBox(
             width: double.infinity,
             child: ElevatedButton(
               onPressed: () {
+                ref.read(selectedChallengeProvider.notifier).state = video;
+                ref.read(userVideoPathProvider.notifier).state = null;
+                ref.read(compareSessionProvider.notifier).state = null;
                 Navigator.pop(context);
                 context.go('/studio');
               },

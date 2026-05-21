@@ -3,11 +3,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../studio/data/compare_session.dart';
 
 class LoadingScreen extends StatefulWidget {
-  final String? videoPath;
+  final CompareSession? session;
 
-  const LoadingScreen({super.key, this.videoPath});
+  const LoadingScreen({super.key, this.session});
 
   @override
   State<LoadingScreen> createState() => _LoadingScreenState();
@@ -61,7 +62,7 @@ class _LoadingScreenState extends State<LoadingScreen>
     // Navigate after ~7 seconds
     Future.delayed(const Duration(seconds: 7), () {
       if (mounted) {
-        context.go('/feedback', extra: widget.videoPath);
+        context.go('/feedback', extra: widget.session);
       }
     });
   }

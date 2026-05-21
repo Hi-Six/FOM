@@ -6,8 +6,9 @@ import '../../../shared/widgets/neon_badge.dart';
 
 class FeedbackScreen extends StatefulWidget {
   final String? videoPath;
+  final String? referenceVideoPath;
 
-  const FeedbackScreen({super.key, this.videoPath});
+  const FeedbackScreen({super.key, this.videoPath, this.referenceVideoPath});
 
   @override
   State<FeedbackScreen> createState() => _FeedbackScreenState();
