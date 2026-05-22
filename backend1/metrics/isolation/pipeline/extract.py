@@ -168,31 +168,34 @@ def extract_from_video(
     raw_rows: List[List[float]] = []
     row_frame_indices: List[int] = []
 
+    track_indices = sorted(tracks_by_frame.keys())
+    n_track = len(track_indices)
+
     with CropPoseExtractor() as pose:
-        frame_index = 0
-        processed = 0
-        while True:
+        for processed, frame_index in enumerate(track_indices, start=1):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
             ret, frame = cap.read()
             if not ret:
-                break
+                continue
 
-            track = tracks_by_frame.get(frame_index)
-            if track is not None:
-                bbox = track_frame_to_bbox(track)
-                ts_ms = frame_timestamp_ms(frame_index, fps)
-                full_lms = pose.process_frame_with_bbox(
-                    frame, bbox, timestamp_ms=ts_ms, padding_ratio=0.0
+            track = tracks_by_frame[frame_index]
+            bbox = track_frame_to_bbox(track)
+            ts_ms = frame_timestamp_ms(frame_index, fps)
+            full_lms = pose.process_frame_with_bbox(
+                frame, bbox, timestamp_ms=ts_ms, padding_ratio=0.0
+            )
+            if full_lms is not None:
+                raw_rows.append(raw_row_from_landmarks(full_lms))
+                row_frame_indices.append(frame_index)
+            else:
+                raw_rows.append(nan_row())
+                row_frame_indices.append(frame_index)
+
+            if progress_every and processed % progress_every == 0:
+                print(
+                    f"  pose extract: {processed}/{n_track} tracked frames "
+                    f"(video {frame_index}/{total_frames})"
                 )
-                if full_lms is not None:
-                    raw_rows.append(raw_row_from_landmarks(full_lms))
-                    row_frame_indices.append(frame_index)
-                else:
-                    raw_rows.append(nan_row())
-                    row_frame_indices.append(frame_index)
-
-            frame_index += 1
-            if progress_every and frame_index % progress_every == 0:
-                print(f"  pose extract: {frame_index}/{total_frames} frames read")
 
     cap.release()
 

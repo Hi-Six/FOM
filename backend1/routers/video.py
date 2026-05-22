@@ -5,6 +5,7 @@
 
 import os
 import time
+from pathlib import Path
 from typing import Literal, Optional
 
 import httpx
@@ -77,6 +78,18 @@ class AnalyzeJsonRequest(BaseModel):
         False,
         description="True면 첫 metric 예외 시 전체 실패. False면 해당 metric만 error",
     )
+    user_isolation_json: Optional[str] = Field(
+        None,
+        description="video_json/ isolation sidecar (예: *_isolation.json). isolation 채점 시 필수",
+    )
+    reference_isolation_json: Optional[str] = Field(
+        None,
+        description="기본 ref_isolation.json (video_json/)",
+    )
+    user_video_path: Optional[str] = Field(
+        None,
+        description="beat 정렬용 유저 mp4 절대경로 또는 video_data/ 파일명",
+    )
 
 
 def _parse_metrics_form(metrics: Optional[str]) -> Optional[list[str]]:
@@ -123,6 +136,12 @@ async def _run_video_analyze_pipeline(
         fail_fast=fail_fast,
     )
 
+    iso_block = (extract_result.get("extractions") or {}).get("isolation") or {}
+    user_iso_json = (
+        iso_block.get("json_filename") if iso_block.get("ok") else None
+    )
+    from metrics.isolation.config import REF_ISOLATION_JSON_FILENAME
+
     score_result = await run_analyze_from_json(
         extract_result["canonical_json"],
         reference_json,
@@ -136,6 +155,9 @@ async def _run_video_analyze_pipeline(
         enable_accuracy=enable_accuracy,
         enable_rom=enable_rom,
         fail_fast=fail_fast,
+        user_isolation_json=user_iso_json,
+        reference_isolation_json=REF_ISOLATION_JSON_FILENAME,
+        user_video_path=video_path,
     )
 
     user_public = {
@@ -354,6 +376,13 @@ async def analyze_video_by_name(
 )
 async def analyze_video_from_json(body: AnalyzeJsonRequest) -> dict:
     try:
+        ref_iso = body.reference_isolation_json
+        user_vid = body.user_video_path
+        if user_vid and not Path(user_vid).is_absolute():
+            from domain.domain1.hub.services.storage_paths import video_path as rom_video_path
+
+            user_vid = str(rom_video_path(user_vid))
+
         result = await run_analyze_from_json(
             body.user_json,
             body.reference_json,
@@ -367,6 +396,9 @@ async def analyze_video_from_json(body: AnalyzeJsonRequest) -> dict:
             enable_accuracy=body.enable_accuracy,
             enable_rom=body.enable_rom,
             fail_fast=body.fail_fast,
+            user_isolation_json=body.user_isolation_json,
+            reference_isolation_json=ref_iso or None,
+            user_video_path=user_vid,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e

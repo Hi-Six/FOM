@@ -18,7 +18,7 @@ from domain.domain1.hub.services.storage_paths import (
     save_extraction_json,
 )
 
-ExtractPipeline = Literal["rom", "rhythm", "power", "creativity"]
+ExtractPipeline = Literal["rom", "rhythm", "power", "creativity", "isolation"]
 
 DEFAULT_EXTRACT_PIPELINES: tuple[ExtractPipeline, ...] = (
     "rom",
@@ -27,7 +27,7 @@ DEFAULT_EXTRACT_PIPELINES: tuple[ExtractPipeline, ...] = (
     "creativity",
 )
 
-_executor = ThreadPoolExecutor(max_workers=4)
+_executor = ThreadPoolExecutor(max_workers=5)
 
 _CREATIVITY_NUM_FRAMES = 30
 
@@ -109,6 +109,12 @@ def _run_power_extract(video_path: str) -> Dict[str, Any]:
     }
 
 
+def _run_isolation_extract(video_path: str) -> Dict[str, Any]:
+    from metrics.isolation.integration import extract_isolation_to_video_json
+
+    return extract_isolation_to_video_json(video_path)
+
+
 def _run_creativity_extract(video_path: str) -> Dict[str, Any]:
     from metrics.creativity.extract import extract_from_media
     from metrics.creativity.preprocess import preprocess_extraction
@@ -158,6 +164,8 @@ def _pipeline_fn(
         return lambda: _run_power_extract(video_path)
     if name == "creativity":
         return lambda: _run_creativity_extract(video_path)
+    if name == "isolation":
+        return lambda: _run_isolation_extract(video_path)
     raise ValueError(f"지원하지 않는 추출 파이프라인: {name}")
 
 
@@ -192,6 +200,8 @@ async def run_user_extractions_parallel(
         rom_mode = extraction_mode if extraction_mode == "full" else "rom"
 
     active = list(pipelines) if pipelines else list(DEFAULT_EXTRACT_PIPELINES)
+    if scoring_metrics and "isolation" in scoring_metrics and "isolation" not in active:
+        active.append("isolation")
     invalid = [p for p in active if p not in DEFAULT_EXTRACT_PIPELINES]
     if invalid:
         raise ValueError(

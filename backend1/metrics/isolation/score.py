@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
-from metrics.isolation.align.time_align import align_and_save, align_from_paths
+from metrics.isolation.align import align_and_save, align_from_paths
 from metrics.isolation.pipeline.geometry import BONE_SEGMENTS
 from metrics.isolation.pipeline.io import load_extraction_json, save_json
 
@@ -213,6 +213,8 @@ def score_from_json_files(
     user_offset_sec: float = 0.0,
     ref_offset_sec: float = 0.0,
     auto_detect_start: bool = False,
+    alignment_method: str = "beat",
+    **align_kw: Any,
 ) -> Dict[str, Any]:
     aligned = align_from_paths(
         user_json,
@@ -220,6 +222,8 @@ def score_from_json_files(
         user_offset_sec=user_offset_sec,
         ref_offset_sec=ref_offset_sec,
         auto_detect_start=auto_detect_start,
+        method=alignment_method,  # type: ignore[arg-type]
+        **align_kw,
     )
     return score_from_alignment(aligned)
 
@@ -229,9 +233,16 @@ def score_from_paths(
     ref_json: str,
     aligned_out: Optional[str] = None,
     score_out: Optional[str] = None,
+    alignment_method: str = "beat",
+    ref_compare_duration_sec: Optional[float] = None,
     **align_kw: Any,
 ) -> Dict[str, Any]:
     """align + score + 선택 저장."""
+    from metrics.isolation.config import REF_COMPARE_DURATION_SEC
+
+    if ref_compare_duration_sec is None and "ref_compare_duration_sec" not in align_kw:
+        align_kw["ref_compare_duration_sec"] = REF_COMPARE_DURATION_SEC
+    align_kw = {**align_kw, "method": alignment_method}
     if aligned_out:
         aligned = align_and_save(user_json, ref_json, aligned_out, **align_kw)
     else:

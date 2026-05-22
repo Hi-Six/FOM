@@ -46,6 +46,34 @@ LANDMARK_NAMES: Tuple[str, ...] = (
     "right_foot_index",
 )
 
+MIN_MEDIAPIPE_VERSION = (0, 10, 31)
+
+
+def _parse_version(version: str) -> tuple[int, ...]:
+    parts: list[int] = []
+    for piece in version.split("."):
+        if not piece.isdigit():
+            break
+        parts.append(int(piece))
+    return tuple(parts)
+
+
+def assert_mediapipe_tasks_compatible() -> None:
+    """
+    Windows + Py3.12: mediapipe==0.10.30 Tasks API → AttributeError: function 'free' not found.
+    requirements.txt: mediapipe>=0.10.31
+    """
+    import mediapipe as mp
+
+    v = _parse_version(getattr(mp, "__version__", "0"))
+    if v < MIN_MEDIAPIPE_VERSION:
+        raise RuntimeError(
+            f"mediapipe {mp.__version__} 은 PoseLandmarker(Tasks)에 사용할 수 없습니다. "
+            f"필요: >=0.10.31. conda activate aiproject 후 "
+            "pip install -r requirements.txt 를 실행하세요."
+        )
+
+
 POSE_LANDMARKER_HEAVY_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
     "pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task"
@@ -121,6 +149,7 @@ class VideoPoseLandmarker:
         min_pose_presence_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
     ) -> None:
+        assert_mediapipe_tasks_compatible()
         import mediapipe as mp
         from mediapipe.tasks.python import vision
         from mediapipe.tasks.python.core import base_options as base_options_lib
