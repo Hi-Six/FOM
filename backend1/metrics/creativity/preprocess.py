@@ -87,11 +87,19 @@ def sample_frames_uniform(
     frames: list[dict[str, Any]],
     num_frames: int,
     offset_sec: float = 0.0,
+    end_sec: float | None = None,
 ) -> list[dict[str, Any]]:
-    """영상 전체(또는 offset 이후) 프레임 목록에서 num_frames 개를 균등 샘플."""
+    """[offset_sec, end_sec] 구간(또는 offset 이후 전체)에서 num_frames 개를 균등 샘플."""
     pool = frames
-    if offset_sec > 0:
-        pool = [f for f in frames if float(f.get("time_sec", 0.0)) >= offset_sec]
+    if offset_sec > 0 or end_sec is not None:
+        pool = []
+        for f in frames:
+            t = float(f.get("time_sec", 0.0))
+            if t < offset_sec:
+                continue
+            if end_sec is not None and t > end_sec:
+                continue
+            pool.append(f)
     if not pool:
         return []
     if num_frames >= len(pool):
@@ -182,10 +190,11 @@ def preprocess_extraction(
     num_frames: int,
     *,
     offset_sec: float = 0.0,
+    end_sec: float | None = None,
     apply_mirror: bool = True,
     visibility_threshold: float = DEFAULT_VISIBILITY_THRESHOLD,
 ) -> dict[str, Any]:
-    """전체 프레임 시퀀스에서 균등 샘플·미러·visibility 적용 후 extraction 갱신."""
+    """전체 프레임 시퀀스에서 [offset, end] 구간 균등 샘플·미러·visibility 적용."""
     all_frames: list[dict[str, Any]] = list(extraction.get("frames") or [])
     if not all_frames:
         extraction["frames"] = []
@@ -196,7 +205,7 @@ def preprocess_extraction(
         all_frames = apply_mirror_to_frames(all_frames)
         mirror_applied = True
 
-    sampled = sample_frames_uniform(all_frames, num_frames, offset_sec)
+    sampled = sample_frames_uniform(all_frames, num_frames, offset_sec, end_sec)
     visible = filter_frames_by_visibility(sampled, visibility_threshold)
 
     center_scores = [
@@ -209,6 +218,7 @@ def preprocess_extraction(
     extraction["frames"] = visible
     extraction["preprocess"] = {
         "offset_sec": offset_sec,
+        "end_sec": end_sec,
         "num_frames_requested": num_frames,
         "frames_total": len(all_frames),
         "frames_after_sample": len(sampled),

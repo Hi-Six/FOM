@@ -10,10 +10,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from .align import align_extractions
-from .creativity import score_creativity
-from .extract import extract_from_media, is_image_path, save_extraction
-from .preprocess import preprocess_extraction, resolve_offset_sec
+from .extract import is_image_path
+from .service import analyze_media_pair, ensure_output_dirs
 
 _OUTPUT_ROOT = Path(__file__).resolve().parent / "output"
 _DEFAULT_SAVE_DIR = _OUTPUT_ROOT / "extractions"
@@ -23,11 +21,6 @@ _DEFAULT_OUTPUT = _OUTPUT_ROOT / "creativity_score.json"
 def default_output_path() -> Path:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     return _OUTPUT_ROOT / f"creativity_score_{ts}.json"
-
-
-def ensure_output_dirs() -> None:
-    _OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
-    _DEFAULT_SAVE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _require_file(path: str, label: str) -> Path:
@@ -73,7 +66,10 @@ def _print_report(
     inputs = payload.get("inputs") or {}
     creativity = payload.get("creativity") or {}
     breakdown = creativity.get("breakdown") or {}
+    accuracy = payload.get("accuracy") or {}
+    acc_bd = accuracy.get("breakdown") or {}
     align = payload.get("alignment") or {}
+    music = payload.get("music_align") or {}
     prep_user = (payload.get("preprocess") or {}).get("user") or {}
     prep_ref = (payload.get("preprocess") or {}).get("reference") or {}
     frame_diffs = creativity.get("frame_diffs") or []
@@ -86,7 +82,9 @@ def _print_report(
     lines.append("  창의성(Creativity) 분석 결과")
     lines.append(sep)
     lines.append("")
-    lines.append(f"  점수: {creativity.get('score', 0):.2f} / 100")
+    lines.append(f"  창의성 점수: {creativity.get('score', 0):.2f} / 100")
+    if accuracy:
+        lines.append(f"  정확도 점수: {accuracy.get('score', 0):.2f} / 100 (참고)")
     lines.append("")
     lines.append("- 입력")
     lines.append(f"  사용자:     {_fmt_path(inputs.get('user', ''))}")
@@ -94,19 +92,38 @@ def _print_report(
     lines.append(f"  미디어:     {inputs.get('media_type', '-')}")
     lines.append(f"  샘플 프레임: {inputs.get('num_frames', '-')}")
     if inputs.get("media_type") == "video":
-        lines.append(f"  사용자 offset: {inputs.get('user_offset_sec', 0):.2f}s")
-        lines.append(f"  레퍼런스 offset: {inputs.get('ref_offset_sec', 0):.2f}s")
-        if inputs.get("auto_detect_start"):
+        lines.append(f"  사용자 구간: {inputs.get('user_offset_sec', 0):.2f}s ~ {inputs.get('user_end_sec', '끝')}")
+        lines.append(f"  레퍼 구간:   {inputs.get('ref_offset_sec', 0):.2f}s ~ {inputs.get('ref_end_sec', '끝')}")
+        if inputs.get("music_align"):
+            lines.append("  음악 정렬:   on (동일 BGM 전제)")
+        elif inputs.get("auto_detect_start"):
             lines.append("  시작 추정:   auto-detect (포즈 움직임)")
     lines.append(f"  정렬 방식:   {inputs.get('alignment', '-')}")
     lines.append(f"  미러 보정:   {inputs.get('apply_mirror', '-')}")
+    if music and not music.get("error"):
+        lines.append("")
+        lines.append("- 음악 구간 (크로마)")
+        lines.append(
+            f"  공통 길이: {music.get('common_duration_sec', '-')}s  "
+            f"매칭 peak: {music.get('music_match_peak', '-')}  "
+            f"연속성: {music.get('music_continuity', '-')}"
+        )
+        if music.get("music_verified") is not None:
+            ok = "예" if music.get("music_verified") else "아니오"
+            lines.append(f"  검증 통과: {ok}")
+    elif music and music.get("error"):
+        lines.append("")
+        lines.append(f"- 음악 정렬 실패: {music['error']}")
     lines.append("")
     lines.append("- 전처리")
     for label, prep in (("사용자", prep_user), ("레퍼런스", prep_ref)):
         if not prep:
             continue
+        end_s = prep.get("end_sec")
+        end_txt = f"{end_s:.2f}s" if end_s is not None else "끝"
         lines.append(
-            f"  [{label}] 전체 {prep.get('frames_total', '?')}프레임 → "
+            f"  [{label}] {prep.get('offset_sec', 0):.2f}s~{end_txt} | "
+            f"전체 {prep.get('frames_total', '?')} → "
             f"샘플 {prep.get('frames_after_sample', '?')} → "
             f"유효 {prep.get('frames_after_visibility', '?')}"
         )
@@ -115,6 +132,8 @@ def _print_report(
     lines.append("")
     lines.append("- 프레임 정렬")
     lines.append(f"  방식: {align.get('method', '-')}, 쌍 {align.get('pair_count', 0)}개")
+    if align.get("dtw_mean_cost") is not None:
+        lines.append(f"  DTW 평균 비용: {align.get('dtw_mean_cost')}")
     dup = align.get("duplicate_ref_ratio")
     if dup is not None:
         lines.append(f"  레퍼 중복 매칭 비율: {float(dup) * 100:.1f}%")
@@ -126,16 +145,22 @@ def _print_report(
         lines.append(f"  사유: {breakdown['reason']}")
     else:
         lines.append(f"  평균 이탈(mean_divergence):  {breakdown.get('mean_divergence', 0):.4f}")
-        lines.append(f"  이탈 분산(divergence_std):   {breakdown.get('divergence_std', 0):.4f}")
-        lines.append(f"  움직임 강도(motion):        {breakdown.get('motion_intensity', 0):.4f}")
+        lines.append(f"  band factor:               {breakdown.get('divergence_band_factor', '-')}")
+        lines.append(f"  DTW penalty:               {breakdown.get('dtw_penalty_factor', '-')}")
+        lines.append(f"  effective band:            {breakdown.get('effective_band_factor', '-')}")
+        lines.append(f"  combined_raw:                {breakdown.get('combined_raw', '-')}")
+        if breakdown.get("baseline_subtracted"):
+            lines.append(f"  baseline_raw:                {breakdown.get('baseline_combined_raw', '-')}")
+            lines.append(f"  after baseline:              {breakdown.get('combined_after_baseline', '-')}")
         lines.append(
             f"  평가 쌍: {breakdown.get('pairs_used', 0)} / {breakdown.get('pairs_evaluated', 0)}"
         )
-        w = breakdown.get("weights") or {}
-        lines.append(
-            f"  가중치: mean {w.get('mean_divergence', '-')} | "
-            f"std {w.get('divergence_std', '-')} | motion {w.get('motion', '-')}"
-        )
+    if acc_bd and not acc_bd.get("reason"):
+        lines.append("")
+        lines.append("- 정확도 (참고)")
+        lines.append(f"  similarity_factor: {acc_bd.get('similarity_factor', '-')}")
+        if acc_bd.get("reference_self_score") is not None:
+            lines.append(f"  ref vs ref:        {acc_bd.get('reference_self_score')}점")
     lines.append("")
     lines.append("- 프레임별 이탈 요약")
     if diff_summary["count"]:
@@ -145,6 +170,7 @@ def _print_report(
         )
         if diff_summary["skipped"]:
             lines.append(f"  스킵: {diff_summary['skipped']}프레임")
+
         def _diff_line(d: dict) -> str:
             uf, rf = d.get("user_frame", "?"), d.get("ref_frame", "?")
             div = d.get("divergence")
@@ -185,83 +211,32 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
         return 1
 
-    num_frames = 1 if user_is_image else args.num_frames
-    if num_frames < 1:
-        print("--num-frames 는 1 이상이어야 합니다.", file=sys.stderr)
-        return 1
-
-    user_raw = extract_from_media(str(user_path))
-    ref_raw = extract_from_media(str(ref_path))
-
-    user_offset = 0.0
-    ref_offset = 0.0
-    if not user_is_image:
-        user_offset = resolve_offset_sec(
-            user_raw.get("frames") or [],
-            args.user_offset,
-            args.auto_detect_start,
-        )
-        ref_offset = resolve_offset_sec(
-            ref_raw.get("frames") or [],
-            args.ref_offset,
-            args.auto_detect_start,
-        )
-
-    user_ext = preprocess_extraction(
-        user_raw,
-        num_frames,
-        offset_sec=user_offset,
-        apply_mirror=args.apply_mirror,
-        visibility_threshold=args.visibility_threshold,
-    )
-    ref_ext = preprocess_extraction(
-        ref_raw,
-        num_frames,
-        offset_sec=ref_offset,
-        apply_mirror=args.apply_mirror,
-        visibility_threshold=args.visibility_threshold,
-    )
-
-    ensure_output_dirs()
     save_dir = Path(args.save_dir) if args.save_dir else _DEFAULT_SAVE_DIR
-    save_dir.mkdir(parents=True, exist_ok=True)
-    save_extraction(user_ext, save_dir / "user.creativity.json")
-    save_extraction(ref_ext, save_dir / "reference.creativity.json")
-
-    alignment_method = "index" if user_is_image else args.alignment
-    pairs, align_meta = align_extractions(
-        user_ext,
-        ref_ext,
-        method=alignment_method,
-        user_offset_sec=0.0,
-        ref_offset_sec=0.0,
-    )
-
-    if not pairs:
-        print("비교할 프레임이 없습니다. 포즈·visibility를 확인하세요.", file=sys.stderr)
+    try:
+        payload = analyze_media_pair(
+            user_path,
+            ref_path,
+            num_frames=args.num_frames,
+            user_offset_sec=args.user_offset,
+            ref_offset_sec=args.ref_offset,
+            auto_detect_start=args.auto_detect_start,
+            music_align=args.music_align,
+            baseline=args.baseline,
+            with_accuracy=args.with_accuracy,
+            alignment=args.alignment,
+            apply_mirror=args.apply_mirror,
+            visibility_threshold=args.visibility_threshold,
+            save_extractions=True,
+            save_dir=save_dir,
+        )
+    except ValueError as e:
+        print(str(e), file=sys.stderr)
+        return 1
+    except FileNotFoundError as e:
+        print(str(e), file=sys.stderr)
         return 1
 
-    result = score_creativity(pairs)
-    payload = {
-        "inputs": {
-            "user": str(user_path),
-            "reference": str(ref_path),
-            "media_type": "image" if user_is_image else "video",
-            "num_frames": num_frames,
-            "user_offset_sec": user_offset,
-            "ref_offset_sec": ref_offset,
-            "auto_detect_start": args.auto_detect_start and not user_is_image,
-            "alignment": alignment_method,
-            "apply_mirror": args.apply_mirror,
-            "visibility_threshold": args.visibility_threshold,
-        },
-        "preprocess": {
-            "user": user_ext.get("preprocess"),
-            "reference": ref_ext.get("preprocess"),
-        },
-        "alignment": align_meta,
-        "creativity": result,
-    }
+    align_meta = payload.get("alignment") or {}
     if align_meta.get("warning"):
         print(align_meta["warning"], file=sys.stderr)
 
@@ -291,26 +266,43 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--num-frames",
         type=int,
-        default=30,
+        default=50,
         metavar="N",
-        help="영상 전체(또는 offset 이후)에서 균등 샘플 프레임 수",
+        help="음악 구간(또는 offset 이후)에서 균등 샘플 프레임 수 (기본 50)",
     )
     parser.add_argument(
         "--user-offset",
         type=float,
         default=0.0,
-        help="사용자 영상 샘플 시작 시각(초). 0이면 영상 처음부터",
+        help="사용자 샘플 시작(초). 0이 아니면 음악 정렬 스킵",
     )
     parser.add_argument(
         "--ref-offset",
         type=float,
         default=0.0,
-        help="레퍼런스 영상 샘플 시작 시각(초). 0이면 영상 처음부터",
+        help="레퍼런스 샘플 시작(초). 0이 아니면 음악 정렬 스킵",
     )
     parser.add_argument(
         "--auto-detect-start",
         action="store_true",
-        help="포즈 움직임으로 춤 시작 시각 추정 후 그 시점부터 샘플",
+        help="포즈 움직임으로 춤 시작 추정 (음악 정렬과 동시 사용 불가)",
+    )
+    parser.add_argument(
+        "--music-align",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="동일 BGM 전제 크로마 구간 [시작,끝] 정렬 후 샘플 (기본 on)",
+    )
+    parser.add_argument(
+        "--baseline",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="ref vs ref 기준선 보정 (기본 on)",
+    )
+    parser.add_argument(
+        "--with-accuracy",
+        action="store_true",
+        help="동일 파이프라인 정확도 점수 함께 출력",
     )
     parser.add_argument(
         "--alignment",
@@ -322,7 +314,7 @@ def main(argv: list[str] | None = None) -> int:
         "--apply-mirror",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="좌우 미러 감지 시 관절 left/right 스왵",
+        help="좌우 미러 감지 시 관절 left/right 스왑",
     )
     parser.add_argument(
         "--visibility-threshold",
