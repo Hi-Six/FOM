@@ -49,9 +49,14 @@ _BEAT_HIT_WEIGHT = 0.7       # 비트 적중률 가중치
 _BEAT_PRECISION_WEIGHT = 0.3 # 타이밍 정밀도 가중치
 _DTW_WEIGHT = 1.0
 
-# 통합 채점 (레퍼런스 영상 + 비트) 가중치: beat 70%, DTW 30%
-_FULL_DTW_WEIGHT = 0.3
+# 통합 채점 (레퍼런스 영상 + 비트) 가중치: beat 70%, wow 30%
+_FULL_WOW_WEIGHT = 0.3
 _FULL_BEAT_WEIGHT = 0.7
+
+# 와우 포인트 비교 파라미터
+_WOW_TOLERANCE_SEC = 0.25   # 와우 포인트 허용 오차 (초)
+_WOW_HIT_WEIGHT = 0.7       # 적중률 가중치
+_WOW_PRECISION_WEIGHT = 0.3 # 타이밍 정밀도 가중치
 
 
 def _resolve_keypoints(genre: str) -> List[str]:
@@ -236,6 +241,81 @@ def score_motion_vs_beats(
     return {"score": round(score, 2), "breakdown": breakdown, "frame_diffs": [], "judgment": judgment}
 
 
+def score_wow_points_vs_reference(
+    user_extraction: Dict[str, Any],
+    ref_extraction: Dict[str, Any],
+    genre: str = "girl_idol",
+) -> Dict[str, Any]:
+    """
+    레퍼런스 영상의 와우 포인트(강조 동작·급정지)와 사용자 와우 포인트를 비교해 채점.
+
+    - hit_rate  : 레퍼런스 포인트 중 허용 오차 내에 사용자 포인트가 있는 비율
+    - precision : 적중된 포인트의 평균 오차를 정밀도로 변환
+    - score = 70% × hit_rate + 30% × precision
+
+    반환: {"score": float, "breakdown": dict, "frame_diffs": list}
+    """
+    keypoints = _resolve_keypoints(genre)
+    user_fps = float(user_extraction.get("fps") or 30.0)
+    ref_fps = float(ref_extraction.get("fps") or 30.0)
+    user_frames = user_extraction.get("frames") or []
+    ref_frames = ref_extraction.get("frames") or []
+
+    if len(user_frames) < 2 or len(ref_frames) < 2:
+        return {"score": 0.0, "breakdown": {"error": "insufficient_frames"}, "frame_diffs": []}
+
+    user_sig = _velocity_signal(user_frames, keypoints)
+    ref_sig = _velocity_signal(ref_frames, keypoints)
+
+    user_wow = _detect_wow_points(user_sig, user_fps)
+    ref_wow = _detect_wow_points(ref_sig, ref_fps)
+
+    if not ref_wow:
+        return {"score": 0.0, "breakdown": {"error": "no_ref_wow_points"}, "frame_diffs": []}
+
+    if not user_wow:
+        return {
+            "score": 0.0,
+            "breakdown": {"error": "no_user_wow_points", "ref_wow_count": len(ref_wow)},
+            "frame_diffs": [],
+        }
+
+    matched = 0
+    total_error = 0.0
+    missed: List[float] = []
+
+    for rt in ref_wow:
+        nearest_err = min(abs(rt - ut) for ut in user_wow)
+        if nearest_err <= _WOW_TOLERANCE_SEC:
+            matched += 1
+            total_error += nearest_err
+        else:
+            missed.append(round(rt, 3))
+
+    hit_rate = matched / len(ref_wow)
+    mean_error = total_error / matched if matched > 0 else _WOW_TOLERANCE_SEC
+    precision = max(0.0, 1.0 - mean_error / _WOW_TOLERANCE_SEC)
+
+    score = float(np.clip(
+        100.0 * (_WOW_HIT_WEIGHT * hit_rate + _WOW_PRECISION_WEIGHT * precision),
+        0.0, 100.0,
+    ))
+
+    breakdown = {
+        "genre": genre,
+        "keypoints_used": keypoints,
+        "ref_wow_count": len(ref_wow),
+        "user_wow_count": len(user_wow),
+        "matched": matched,
+        "hit_rate": round(hit_rate, 4),
+        "mean_timing_error_sec": round(mean_error, 4),
+        "timing_precision": round(precision, 4),
+        "missed_ref_timestamps_sec": missed,
+        "wow_tolerance_sec": _WOW_TOLERANCE_SEC,
+    }
+    return {"score": round(score, 2), "breakdown": breakdown, "frame_diffs": []}
+
+
 def score_motion_full(
     user_extraction: Dict[str, Any],
     ref_extraction: Dict[str, Any],
@@ -245,28 +325,28 @@ def score_motion_full(
     """
     레퍼런스 영상 기반 통합 채점.
 
-    - dtw_score  (50%): 사용자 동작 패턴이 레퍼런스 동작과 얼마나 유사한가 (DTW)
-    - beat_score (50%): 사용자 동작 피크가 레퍼런스 영상의 음악 비트와 얼마나 맞는가
+    - wow_score  (30%): 레퍼런스의 강조·정지 포인트를 사용자가 맞히는가
+    - beat_score (70%): 사용자 동작 피크가 레퍼런스 영상의 음악 비트와 얼마나 맞는가
 
     반환: {"score": float, "breakdown": dict, "frame_diffs": list}
     """
-    dtw_result = score_rhythm_vs_reference(user_extraction, ref_extraction, genre=genre)
+    wow_result = score_wow_points_vs_reference(user_extraction, ref_extraction, genre=genre)
     beat_result = score_motion_vs_beats(user_extraction, beat_data, genre=genre)
 
-    dtw_score = dtw_result["score"]
+    wow_score = wow_result["score"]
     beat_score = beat_result["score"]
 
     combined = round(
-        _FULL_DTW_WEIGHT * dtw_score + _FULL_BEAT_WEIGHT * beat_score, 2
+        _FULL_WOW_WEIGHT * wow_score + _FULL_BEAT_WEIGHT * beat_score, 2
     )
 
     breakdown = {
         "genre": genre,
-        "dtw_score": dtw_score,
+        "wow_score": wow_score,
         "beat_score": beat_score,
-        "dtw_weight": _FULL_DTW_WEIGHT,
+        "wow_weight": _FULL_WOW_WEIGHT,
         "beat_weight": _FULL_BEAT_WEIGHT,
-        "dtw_detail": dtw_result["breakdown"],
+        "wow_detail": wow_result["breakdown"],
         "beat_detail": beat_result["breakdown"],
     }
     return {"score": combined, "breakdown": breakdown, "frame_diffs": [], "judgment": beat_result.get("judgment")}
@@ -386,6 +466,25 @@ def _detect_peaks(signal: np.ndarray, fps: float) -> Dict[str, Any]:
         "std_sec": round(std_sec, 4),
         "cv": round(cv, 4),
     }
+
+
+def _detect_wow_points(signal: np.ndarray, fps: float) -> List[float]:
+    """강조 동작(피크) + 급정지(밸리)를 와우 포인트로 감지, 타임스탬프(초) 반환."""
+    if signal.std() < 1e-9:
+        return []
+
+    norm = signal / (signal.std() + 1e-9)
+    mean_val = float(norm.mean())
+
+    peaks, _ = find_peaks(norm, distance=_MIN_PEAK_DISTANCE, prominence=_NORMALIZED_PROMINENCE)
+
+    # 급정지: 반전 신호의 피크 = 원래 신호의 밸리
+    # 평균 이하인 경우만 인정 — 이미 정적인 구간의 노이즈 제거
+    valleys, _ = find_peaks(-norm, distance=_MIN_PEAK_DISTANCE, prominence=_NORMALIZED_PROMINENCE)
+    valid_valleys = [v for v in valleys if float(norm[v]) < mean_val]
+
+    all_indices = sorted(set(peaks.tolist()) | set(valid_valleys))
+    return [round(int(idx) / fps, 4) for idx in all_indices]
 
 
 def _downsample(signal: np.ndarray, orig_fps: float, target_fps: float) -> np.ndarray:
