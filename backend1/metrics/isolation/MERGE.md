@@ -10,7 +10,7 @@
 
 | 항목 | 조치 |
 |------|------|
-| 대용량 artifact Git 커밋 | 루트 `.gitignore` + `git rm --cached` (yolo/pt, ref.json 등) |
+| 대용량 artifact Git 커밋 | `metrics/isolation/.gitignore` + `git rm --cached` (yolo/pt, ref.json 등) |
 | `main.py` 라우터 충돌 | 병합 시 **모든 metric 라우터를 나열** (아래 예시). isolation만 단독 유지하지 않음 |
 | `__init__.py` 비어 있음 | `score_isolation` export 완료 |
 | `service.py` temp 누수 | `keep_user_json` 시 artifact로 복사 후 **항상** `rmtree` |

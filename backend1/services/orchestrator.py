@@ -22,7 +22,8 @@ from domain.domain1.hub.services.scoring.rom_scorer import score_rom
 from domain.domain1.hub.services.storage_paths import load_comparison_fields, load_extraction_json
 
 from metrics.creativity.creativity import score_creativity
-from metrics.isolation.score import score_isolation
+from metrics.isolation.integration import score_isolation_for_fom
+from metrics.isolation.config import REF_ISOLATION_JSON_FILENAME
 from metrics.power import score_power
 from metrics.rhythm.services.scoring.rhythm_scorer import (
     score_rhythm_from_extraction,
@@ -144,10 +145,28 @@ def _run_creativity(aligned_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
     return score_creativity(aligned_pairs)
 
 
-def _run_isolation(aligned_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    if not aligned_pairs:
-        raise ValueError("isolation: 정렬된 프레임 쌍이 없습니다.")
-    return score_isolation(aligned_pairs)
+def _run_isolation(
+    *,
+    user_isolation_json: str,
+    reference_isolation_json: str = REF_ISOLATION_JSON_FILENAME,
+    user_video_path: Optional[str] = None,
+    user_offset_sec: float = 0.0,
+    ref_offset_sec: float = 0.0,
+    auto_detect_start: bool = False,
+) -> Dict[str, Any]:
+    if not user_isolation_json:
+        raise ValueError(
+            "isolation: user isolation JSON이 없습니다. "
+            "extract_coordinator isolation 파이프라인을 확인하세요."
+        )
+    return score_isolation_for_fom(
+        user_isolation_json,
+        reference_isolation_json,
+        user_video_path=user_video_path,
+        user_offset_sec=user_offset_sec,
+        ref_offset_sec=ref_offset_sec,
+        auto_detect_start=auto_detect_start,
+    )
 
 
 def _run_rom(
@@ -219,7 +238,11 @@ async def run_all_scores(
     ref_offset_sec: float = 0.0,
     auto_detect_start: bool = False,
     fail_fast: bool = False,
+    user_isolation_json: Optional[str] = None,
+    reference_isolation_json: Optional[str] = None,
+    user_video_path: Optional[str] = None,
 ) -> Dict[str, Dict[str, Any]]:
+    ref_iso_name = reference_isolation_json or REF_ISOLATION_JSON_FILENAME
     """
     ARCHITECTURE §3.2 — asyncio.gather + run_in_executor.
 
@@ -244,7 +267,16 @@ async def run_all_scores(
         )
     if "isolation" in enabled_metrics:
         tasks["isolation"] = asyncio.create_task(
-            _run_metric_in_executor(lambda: _run_isolation(aligned_pairs))
+            _run_metric_in_executor(
+                lambda: _run_isolation(
+                    user_isolation_json=user_isolation_json or "",
+                    reference_isolation_json=ref_iso_name,
+                    user_video_path=user_video_path,
+                    user_offset_sec=user_offset_sec,
+                    ref_offset_sec=ref_offset_sec,
+                    auto_detect_start=auto_detect_start,
+                )
+            )
         )
     if "rom" in enabled_metrics:
         tasks["rom"] = asyncio.create_task(
@@ -321,10 +353,14 @@ async def run_analyze_from_json(
     enable_accuracy: bool = False,
     enable_rom: bool = True,
     fail_fast: bool = False,
+    user_isolation_json: Optional[str] = None,
+    reference_isolation_json: Optional[str] = None,
+    user_video_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     POST /video/analyze/json 오케스트레이터 진입점.
     """
+    ref_iso_name = reference_isolation_json or REF_ISOLATION_JSON_FILENAME
     if alignment_method not in ("time", "dtw"):
         raise ValueError(
             f"지원하지 않는 alignment: {alignment_method}. 허용: time, dtw"
@@ -361,9 +397,7 @@ async def run_analyze_from_json(
         auto_detect_start=auto_detect_start,
     )
 
-    needs_pairs = bool(
-        set(enabled) & {"accuracy", "creativity", "isolation"}
-    )
+    needs_pairs = bool(set(enabled) & {"accuracy", "creativity"})
     if needs_pairs and not aligned_pairs:
         raise ValueError("정렬된 프레임 쌍이 없습니다. 오프셋·영상 길이를 확인하세요.")
 
@@ -383,6 +417,9 @@ async def run_analyze_from_json(
         ref_offset_sec=ref_offset_sec,
         auto_detect_start=auto_detect_start,
         fail_fast=fail_fast,
+        user_isolation_json=user_isolation_json,
+        reference_isolation_json=ref_iso_name,
+        user_video_path=user_video_path,
     )
 
     total_score, grade = compute_total_score(metric_scores)
@@ -401,6 +438,8 @@ async def run_analyze_from_json(
         },
         "meta": {
             "metrics_run": enabled,
+            "user_isolation_json": user_isolation_json,
+            "reference_isolation_json": ref_iso_name,
             "user_fps": user_cmp.get("fps"),
             "user_total_frames": user_cmp.get("total_frames"),
             "user_schema": user_cmp.get("schema"),
