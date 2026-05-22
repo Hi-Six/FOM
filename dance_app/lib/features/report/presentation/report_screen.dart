@@ -1,32 +1,72 @@
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../shared/widgets/fallback_video_preview.dart';
 import '../../../shared/widgets/neon_badge.dart';
+import '../../studio/data/studio_providers.dart';
+import '../../studio/data/video_analyze_models.dart';
 import '../data/report_repository.dart';
-
-final reportProvider = FutureProvider<CareerReport>((ref) {
-  return ReportRepository().fetchReport();
-});
 
 class ReportScreen extends ConsumerWidget {
   const ReportScreen({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final asyncReport = ref.watch(reportProvider);
+    final analyze = ref.watch(videoAnalyzeResultProvider);
 
+    if (analyze == null) {
+      return Scaffold(
+        backgroundColor: AppColors.background,
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(32),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(
+                    Icons.radar_outlined,
+                    color: AppColors.neonPurple,
+                    size: 56,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '아직 분석 결과가 없습니다',
+                    style: Theme.of(context).textTheme.titleMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Studio에서 촬영 후\n「비교 분석 시작」을 눌러 주세요.',
+                    style: Theme.of(context).textTheme.bodyMedium,
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 24),
+                  ElevatedButton(
+                    onPressed: () => context.go('/studio'),
+                    child: const Text('Studio로 이동'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final challenge = ref.watch(selectedChallengeProvider);
+    final report = analyze.toCareerReport(
+      genre: challenge?.genre ?? '팝핑',
+    );
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
-        child: asyncReport.when(
-          data: (report) => _ReportBody(report: report),
-          loading: () => const Center(
-            child: CircularProgressIndicator(color: AppColors.neonGreen),
-          ),
-          error: (e, _) => Center(
-            child: Text('오류: $e', style: const TextStyle(color: AppColors.error)),
-          ),
+        child: _ReportBody(
+          report: report,
+          grade: analyze.grade,
+          analyze: analyze,
         ),
       ),
     );
@@ -35,8 +75,14 @@ class ReportScreen extends ConsumerWidget {
 
 class _ReportBody extends StatelessWidget {
   final CareerReport report;
+  final String grade;
+  final VideoAnalyzeResult analyze;
 
-  const _ReportBody({required this.report});
+  const _ReportBody({
+    required this.report,
+    required this.grade,
+    required this.analyze,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -66,9 +112,13 @@ class _ReportBody extends StatelessWidget {
                       label: '점수 ${report.overallScore}',
                       color: AppColors.neonPurple,
                     ),
+                    const SizedBox(width: 8),
+                    NeonBadge(label: '등급 $grade', color: AppColors.neonBlue),
                   ],
                 ),
                 const SizedBox(height: 24),
+                _CompareAnalysisCard(analyze: analyze),
+                const SizedBox(height: 20),
                 _RadarChartCard(radar: report.radar),
                 const SizedBox(height: 20),
                 _AiMessageCard(message: report.aiMessage),
@@ -77,6 +127,128 @@ class _ReportBody extends StatelessWidget {
                 const SizedBox(height: 32),
               ],
             ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _CompareAnalysisCard extends StatelessWidget {
+  final VideoAnalyzeResult analyze;
+
+  const _CompareAnalysisCard({required this.analyze});
+
+  @override
+  Widget build(BuildContext context) {
+    final expertUrls = analyze.expertPlaybackUrls;
+    final userUrls = analyze.userPlaybackUrls;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: AppColors.neonGreen.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.compare_rounded, color: AppColors.neonGreen, size: 18),
+              const SizedBox(width: 8),
+              Text(
+                '비교 분석 영상',
+                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                      color: AppColors.neonGreen,
+                    ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Text(
+            '전문가·사용자 영상에 reference_json / 추출 결과 기반 포즈 오버레이를 재생합니다. '
+            '재생 실패 시 서버 원본·촬영본·asset 순으로 대체합니다.',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+          const SizedBox(height: 12),
+          SizedBox(
+            height: 200,
+            child: Row(
+              children: [
+                Expanded(
+                  child: _CompareVideoPane(
+                    label: analyze.expertVideoCaption,
+                    urls: expertUrls,
+                    placeholder: expertUrls.isEmpty
+                        ? '전문가 영상을 불러올 수 없습니다'
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: _CompareVideoPane(
+                    label: analyze.userVideoCaption,
+                    urls: userUrls,
+                    placeholder: userUrls.isEmpty
+                        ? '분석 영상을 불러올 수 없습니다'
+                        : null,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (analyze.referenceJson != null) ...[
+            const SizedBox(height: 10),
+            Text(
+              '채점 레퍼런스 JSON: ${analyze.referenceJson}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _CompareVideoPane extends StatelessWidget {
+  final String label;
+  final List<String> urls;
+  final String? placeholder;
+
+  const _CompareVideoPane({
+    required this.label,
+    required this.urls,
+    this.placeholder,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Text(label, style: Theme.of(context).textTheme.labelSmall),
+        const SizedBox(height: 6),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(12),
+            child: urls.isNotEmpty
+                ? FallbackVideoPreview(
+                    urls: urls,
+                    height: null,
+                    borderRadius: BorderRadius.circular(12),
+                  )
+                : ColoredBox(
+                    color: AppColors.surface,
+                    child: Center(
+                      child: Text(
+                        placeholder ?? '영상 없음',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ),
+                  ),
           ),
         ),
       ],
@@ -119,9 +291,12 @@ class _RadarChartCard extends StatelessWidget {
               RadarChartData(
                 radarShape: RadarShape.polygon,
                 tickCount: 4,
-                ticksTextStyle: const TextStyle(color: Colors.transparent, fontSize: 0),
-                gridBorderData: const BorderSide(color: AppColors.divider, width: 1),
-                radarBorderData: const BorderSide(color: AppColors.divider, width: 1),
+                ticksTextStyle:
+                    const TextStyle(color: Colors.transparent, fontSize: 0),
+                gridBorderData:
+                    const BorderSide(color: AppColors.divider, width: 1),
+                radarBorderData:
+                    const BorderSide(color: AppColors.divider, width: 1),
                 titlePositionPercentageOffset: 0.2,
                 titleTextStyle: const TextStyle(
                   color: AppColors.textSecondary,
@@ -143,12 +318,12 @@ class _RadarChartCard extends StatelessWidget {
                     ],
                   ),
                 ],
-                tickBorderData: const BorderSide(color: AppColors.divider, width: 1),
+                tickBorderData:
+                    const BorderSide(color: AppColors.divider, width: 1),
               ),
             ),
           ),
           const SizedBox(height: 12),
-          // Legend row
           Wrap(
             spacing: 16,
             runSpacing: 8,
@@ -239,7 +414,7 @@ class _AiMessageCard extends StatelessWidget {
                     ),
                   ),
                   Text(
-                    'LLM 분석 기반',
+                    '6차원 분석 기반',
                     style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 11),
                   ),
                 ],
@@ -311,7 +486,9 @@ class _CareerCards extends StatelessWidget {
             decoration: BoxDecoration(
               color: AppColors.card,
               borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: _colors[i % _colors.length].withValues(alpha: 0.3)),
+              border: Border.all(
+                color: _colors[i % _colors.length].withValues(alpha: 0.3),
+              ),
             ),
             child: Row(
               children: [

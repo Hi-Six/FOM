@@ -20,6 +20,26 @@ BONE_SEGMENTS: Tuple[Tuple[str, str, str], ...] = (
     ("right_foot", "right_ankle", "right_foot_index"),
 )
 
+# ROM 경량 추출 시 MediaPipe에 사용할 관절 (각도·정규화에 필요한 최소 집합)
+LANDMARKS_FOR_ROM: frozenset[str] = frozenset(
+    {
+        "left_shoulder",
+        "right_shoulder",
+        "left_elbow",
+        "right_elbow",
+        "left_wrist",
+        "right_wrist",
+        "left_hip",
+        "right_hip",
+        "left_knee",
+        "right_knee",
+        "left_ankle",
+        "right_ankle",
+        "left_foot_index",
+        "right_foot_index",
+    }
+)
+
 # (이름, 점A, 꼭짓점, 점C) — ∠ABC (도)
 JOINT_ANGLE_TRIPLES: Tuple[Tuple[str, str, str, str], ...] = (
     ("left_elbow", "left_shoulder", "left_elbow", "left_wrist"),

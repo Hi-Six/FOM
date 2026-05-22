@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -9,12 +10,14 @@ class CardVideoPreview extends StatefulWidget {
   /// When null, fills available space from parent constraints.
   final double? height;
   final BorderRadius borderRadius;
+  final VoidCallback? onPlaybackFailed;
 
   const CardVideoPreview({
     super.key,
     required this.videoUrl,
     this.height = 180,
     this.borderRadius = const BorderRadius.vertical(top: Radius.circular(16)),
+    this.onPlaybackFailed,
   });
 
   @override
@@ -24,6 +27,8 @@ class CardVideoPreview extends StatefulWidget {
 class _CardVideoPreviewState extends State<CardVideoPreview> {
   VideoPlayerController? _controller;
   String? _error;
+  bool _notifiedFailure = false;
+  Timer? _stallTimer;
 
   @override
   void initState() {
@@ -35,11 +40,18 @@ class _CardVideoPreviewState extends State<CardVideoPreview> {
   void didUpdateWidget(CardVideoPreview oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.videoUrl != widget.videoUrl) {
+      _cancelStallWatch();
       _controller?.dispose();
       _controller = null;
       _error = null;
+      _notifiedFailure = false;
       _initController();
     }
+  }
+
+  void _cancelStallWatch() {
+    _stallTimer?.cancel();
+    _stallTimer = null;
   }
 
   VideoPlayerController _createController(String path) {
@@ -52,6 +64,49 @@ class _CardVideoPreviewState extends State<CardVideoPreview> {
       return VideoPlayerController.asset(normalized);
     }
     return VideoPlayerController.file(File(normalized));
+  }
+
+  void _notifyFailure() {
+    if (_notifiedFailure || widget.onPlaybackFailed == null) return;
+    _notifiedFailure = true;
+    widget.onPlaybackFailed!();
+  }
+
+  void _startStallWatch(VideoPlayerController controller) {
+    _cancelStallWatch();
+    final isNetwork = widget.videoUrl.startsWith('http');
+    if (!isNetwork || widget.onPlaybackFailed == null) return;
+
+    var samples = 0;
+    Duration? lastPos;
+    _stallTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!mounted || _controller != controller) {
+        _cancelStallWatch();
+        return;
+      }
+      if (!controller.value.isInitialized) return;
+
+      final pos = controller.value.position;
+      final playing = controller.value.isPlaying;
+
+      if (!playing && samples >= 2) {
+        _cancelStallWatch();
+        _notifyFailure();
+        return;
+      }
+
+      if (lastPos != null && pos > lastPos! + const Duration(milliseconds: 100)) {
+        _cancelStallWatch();
+        return;
+      }
+
+      lastPos = pos;
+      samples += 1;
+      if (samples >= 3) {
+        _cancelStallWatch();
+        _notifyFailure();
+      }
+    });
   }
 
   Future<void> _initController() async {
@@ -70,14 +125,19 @@ class _CardVideoPreviewState extends State<CardVideoPreview> {
         return;
       }
       setState(() => _controller = controller);
+      _startStallWatch(controller);
     } catch (e) {
       controller.dispose();
-      if (mounted) setState(() => _error = e.toString());
+      if (mounted) {
+        setState(() => _error = e.toString());
+        _notifyFailure();
+      }
     }
   }
 
   @override
   void dispose() {
+    _cancelStallWatch();
     _controller?.dispose();
     super.dispose();
   }
@@ -85,6 +145,13 @@ class _CardVideoPreviewState extends State<CardVideoPreview> {
   @override
   Widget build(BuildContext context) {
     final controller = _controller;
+
+    if (_error != null && widget.onPlaybackFailed != null) {
+      return ClipRRect(
+        borderRadius: widget.borderRadius,
+        child: _placeholder(),
+      );
+    }
 
     final videoChild = controller != null && controller.value.isInitialized
         ? FittedBox(
