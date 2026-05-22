@@ -1,8 +1,11 @@
 """창의성(creativity) metric."""
 
+from .accuracy import score_accuracy
 from .align import align_by_dtw, align_by_index, align_by_time, align_extractions
 from .creativity import score_creativity
 from .extract import extract_from_image, extract_from_media, extract_from_video, save_extraction
+from .music_align import align_music_segment, resolve_music_offsets
+from .service import analyze_media_pair
 from .preprocess import (
     detect_dance_start,
     preprocess_extraction,
@@ -11,6 +14,7 @@ from .preprocess import (
 
 __all__ = [
     "score_creativity",
+    "score_accuracy",
     "extract_from_image",
     "extract_from_video",
     "extract_from_media",
@@ -22,4 +26,7 @@ __all__ = [
     "align_by_time",
     "align_by_dtw",
     "align_extractions",
+    "align_music_segment",
+    "resolve_music_offsets",
+    "analyze_media_pair",
 ]

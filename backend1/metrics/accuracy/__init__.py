@@ -55,6 +55,29 @@ COLOR_B = ( 30, 120, 255)   # vivid orange -- Dancer B
 # 0.30 = ~30 % of torso height; exp(-d^2/2t^2) gives 37 % at d = t
 JOINT_TOLERANCE = 0.30
 
+# ── Per-joint importance weights for final accuracy score ──────────────────
+# Shoulders and hips are structural anchors; face keypoints carry far less
+# choreographic information than limb joints.
+JOINT_WEIGHTS = np.array([
+    0.5,   # 0  nose
+    0.3,   # 1  L.eye
+    0.3,   # 2  R.eye
+    0.2,   # 3  L.ear
+    0.2,   # 4  R.ear
+    1.2,   # 5  L.shl
+    1.2,   # 6  R.shl
+    1.0,   # 7  L.elb
+    1.0,   # 8  R.elb
+    1.0,   # 9  L.wri
+    1.0,   # 10 R.wri
+    1.2,   # 11 L.hip
+    1.2,   # 12 R.hip
+    1.0,   # 13 L.kne
+    1.0,   # 14 R.kne
+    1.0,   # 15 L.ank
+    1.0,   # 16 R.ank
+], dtype=np.float32)
+
 # ── COCO-17 / 40-kp skeleton edges ─────────────────────────────────────────
 # Inlined from dance_similarity/src/keypoint_expander.py.
 # Edges referencing indices >= 17 are silently skipped when drawing 17-kp poses.
@@ -140,6 +163,111 @@ def _score_bgr(score: float) -> tuple:
         return (0, 200, 230)    # yellow
     else:
         return (50, 60, 230)    # red
+
+
+# ── Grade helper ────────────────────────────────────────────────────────────
+
+def score_to_grade(score: float) -> str:
+    """0–100 score → letter grade; mirrors project-wide grading standard."""
+    if score >= 90:
+        return "A+"
+    if score >= 80:
+        return "A"
+    if score >= 70:
+        return "B"
+    if score >= 60:
+        return "C"
+    return "D"
+
+
+# ── Final accuracy score ─────────────────────────────────────────────────────
+
+def compute_accuracy_score(poses_a: list, poses_b: list) -> dict:
+    """
+    Aggregate per-joint Gaussian matching rates into a final accuracy score.
+
+    Parameters
+    ----------
+    poses_a, poses_b : list of np.ndarray, shape (17, 3)
+        Per-frame COCO-17 keypoints [x, y, visibility] for each dancer.
+        Both lists must share the same frame ordering after temporal alignment.
+
+    Returns
+    -------
+    dict
+        score          : float   0–100  final accuracy score
+        grade          : str     A+/A/B/C/D
+        breakdown      : dict
+            per_joint_scores   : {joint_name: float 0–100 | None if never visible}
+            frame_count        : int   total frame pairs evaluated
+            scored_frame_count : int   frames with ≥1 visible joint pair
+            joint_coverage     : float mean fraction of frames each joint is visible
+    """
+    n = min(len(poses_a), len(poses_b))
+    if n == 0:
+        return {
+            "score": 0.0,
+            "grade": "D",
+            "breakdown": {
+                "per_joint_scores":   {name: None for name in JOINT_NAMES},
+                "frame_count":        0,
+                "scored_frame_count": 0,
+                "joint_coverage":     0.0,
+            },
+        }
+
+    pj_sum   = np.zeros(17, dtype=np.float64)
+    pj_count = np.zeros(17, dtype=np.int32)
+    frame_scores: list = []
+
+    for i in range(n):
+        jscores = per_joint_scores(poses_a[i], poses_b[i])   # (17,), values in [0, 1]
+        visible = ~np.isnan(jscores)
+
+        for j in range(17):
+            if visible[j]:
+                pj_sum[j]   += jscores[j]
+                pj_count[j] += 1
+
+        if visible.any():
+            w = JOINT_WEIGHTS[visible]
+            s = jscores[visible]
+            frame_scores.append(float(np.average(s, weights=w)))
+
+    # Per-joint mean rescaled to 0–100
+    pj_out: dict = {}
+    for j, name in enumerate(JOINT_NAMES):
+        if pj_count[j] > 0:
+            pj_out[name] = round(float(pj_sum[j] / pj_count[j]) * 100.0, 1)
+        else:
+            pj_out[name] = None
+
+    joint_coverage = round(float(np.mean(pj_count > 0)), 3)
+
+    if frame_scores:
+        mean_fs = float(np.mean(frame_scores))
+        # Temporal consistency penalty: high frame-to-frame variance → up to −5 pts.
+        # std ≈ 0.25 (large swing) saturates the 5-pt cap.
+        if len(frame_scores) > 1:
+            std_penalty = min(5.0, float(np.std(frame_scores)) * 20.0)
+        else:
+            std_penalty = 0.0
+        raw = mean_fs * 100.0 - std_penalty
+    else:
+        raw = 0.0
+
+    final_score = round(float(np.clip(raw, 0.0, 100.0)), 1)
+
+    return {
+        "score":   final_score,
+        "grade":   score_to_grade(final_score),
+        "breakdown": {
+            "per_joint_scores":   pj_out,
+            "frame_count":        n,
+            "scored_frame_count": len(frame_scores),
+            "joint_coverage":     joint_coverage,
+        },
+    }
 
 
 # ── Per-joint scoring ───────────────────────────────────────────────────────
@@ -249,10 +377,11 @@ def _nvenc_available() -> bool:
 
 # ── Main renderer ────────────────────────────────────────────────────────────
 
-def render(video_path: Path, cache_path: Path, out_path: Path) -> None:
+def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
     d       = np.load(cache_path)
     poses_a = list(d["pa"])
     poses_b = list(d["pb"])
+    result  = compute_accuracy_score(poses_a, poses_b)
 
     cap      = cv2.VideoCapture(str(video_path))
     vid_w    = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -348,6 +477,8 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> None:
         cap.release()
 
     print(f"\nJoint-score video -> {out_path}")
+    print(f"Accuracy score    : {result['score']} / 100  (grade {result['grade']})")
+    return result
 
 
 # ── Entry point ──────────────────────────────────────────────────────────────
