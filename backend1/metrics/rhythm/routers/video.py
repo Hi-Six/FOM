@@ -77,7 +77,10 @@ async def compare_visualize(
     finally:
         for p in (user_tmp, ref_tmp):
             if p and os.path.exists(p):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass  # Windows: 프로세스가 파일을 잡고 있으면 OS가 재시작 시 정리
 
 
 @router.post("/visualize", summary="영상 업로드 → 리듬 시각화 영상 생성 (비트 옵션)")
@@ -106,7 +109,10 @@ async def visualize_video(
         raise HTTPException(status_code=500, detail=f"시각화 중 오류: {e}")
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @router.post(
@@ -139,7 +145,10 @@ async def visualize_full(
     finally:
         for p in (user_tmp, ref_tmp):
             if p and os.path.exists(p):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass  # Windows: 프로세스가 파일을 잡고 있으면 OS가 재시작 시 정리
 
 
 @router.get("/json/{filename}", summary="저장된 추출 JSON 다운로드")
@@ -169,7 +178,10 @@ async def extract_video(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"처리 중 오류: {e}")
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @router.post(
@@ -205,7 +217,10 @@ async def analyze_full(
     finally:
         for p in (user_tmp, ref_tmp):
             if p and os.path.exists(p):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass  # Windows: 프로세스가 파일을 잡고 있으면 OS가 재시작 시 정리
 
 
 @router.post("/analyze-beats", summary="영상 업로드 → 포즈 추출 + 음악 비트 추출 → 비트 대비 동작 채점")
@@ -231,7 +246,10 @@ async def analyze_beats(
         raise HTTPException(status_code=500, detail=f"분석 중 오류: {e}")
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            os.remove(tmp_path)
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @router.post(
@@ -272,7 +290,10 @@ async def analyze_video(
     finally:
         for p in (user_tmp, ref_tmp):
             if p and os.path.exists(p):
-                os.remove(p)
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass  # Windows: 프로세스가 파일을 잡고 있으면 OS가 재시작 시 정리
 
 
 def _validate_genre(genre: str) -> None:

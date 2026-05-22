@@ -359,8 +359,10 @@ def _detect_peaks(signal: np.ndarray, fps: float) -> Dict[str, Any]:
     if signal.std() < 1e-9:
         return {"peak_indices": [], "intervals_sec": [], "mean_sec": 0.0, "std_sec": 0.0, "cv": 1.0}
 
-    # 단위분산 정규화 후 고정 prominence → 동작 크기와 무관하게 동일 민감도
-    norm_signal = signal / (signal.std() + 1e-9)
+    # 가속도(속도 변화량) 절댓값 사용 — 빠른 동작(속도 peak)과 멈춤(속도 trough) 모두 감지
+    # 멈추는 동작은 속도 신호에서는 trough이지만 가속도에서는 peak로 나타남
+    accel = np.abs(np.diff(signal, prepend=signal[0]))
+    norm_signal = accel / (accel.std() + 1e-9)
     peaks, _ = find_peaks(norm_signal, distance=_MIN_PEAK_DISTANCE, prominence=_NORMALIZED_PROMINENCE)
 
     if len(peaks) < 2:
