@@ -14,7 +14,7 @@
 | 기준 영상 | `data/raw/ref.mp4` | `cli download` |
 | 추출·트랙 JSON | `data/artifacts/*.json` | `cli track` → `cli extract` |
 
-저장소에는 `.gitkeep`·`.gitignore`만 포함됩니다. 클론 후 아래 **첫 설정**을 한 번 실행하세요.
+저장소에는 `.gitkeep`과 `metrics/isolation/.gitignore`(단일)만 포함됩니다. 클론 후 아래 **첫 설정**을 한 번 실행하세요.
 
 ## 첫 설정 (1회)
 
@@ -81,7 +81,9 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `GET /isolation/ready` — `ref.json` 준비 여부
 - `POST /isolation/analyze` — `user_video` multipart 업로드 → isolation 점수
 
-통합 `POST /video/analyze`(6 metric)와 **별도** — 오케스트레이터 미사용.
+통합 `POST /video/analyze` 의 **`scores.isolation` 과 동일** (`score_isolation_for_fom`).
+
+서버 1회: `python -m metrics.isolation.cli extract` 후 `ref_isolation.json` 이 `video_json/` 에 있어야 통합 채점 가능 (없으면 `ref.json` 자동 복사).
 
 ## Flutter
 

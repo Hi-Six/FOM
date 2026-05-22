@@ -37,7 +37,7 @@ def isolation_ready() -> dict:
     description=(
         "YOLO11 track + MediaPipe Heavy 추출 후 기준 ref.json 과 beat(박자) 정렬·채점. "
         "alignment_method=time 으로 시각 정렬만 사용 가능. "
-        "6 metric 통합 analyze 와 별도 엔드포인트입니다."
+        "통합 POST /video/analyze 의 scores.isolation 과 동일 파이프라인(beat·YOLO)."
     ),
 )
 async def analyze_isolation(

@@ -10,6 +10,9 @@ from pathlib import Path
 _BACKEND1 = Path(__file__).resolve().parents[2]
 if str(_BACKEND1) not in sys.path:
     sys.path.insert(0, str(_BACKEND1))
+_ROM_ROOT = _BACKEND1 / "metrics" / "rom"
+if str(_ROM_ROOT) not in sys.path:
+    sys.path.append(str(_ROM_ROOT))
 
 from metrics.isolation.align import align_and_save, detect_beats_from_video, save_beat_map
 from metrics.isolation.config import (
@@ -150,6 +153,11 @@ def cmd_extract(args: argparse.Namespace) -> None:
     n = len(data.get("frames", []))
     print(f"  frames: {n}")
     print(f"  saved: {out.resolve()}")
+    if out.resolve() == (DATA_ARTIFACTS / "ref.json").resolve():
+        from metrics.isolation.integration import publish_local_ref_to_video_json
+
+        vj = publish_local_ref_to_video_json()
+        print(f"  video_json: {vj}")
 
 
 def _align_kwargs(args: argparse.Namespace, *, user_video: Path | None = None) -> dict:

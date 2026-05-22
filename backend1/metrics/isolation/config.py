@@ -31,6 +31,9 @@ MP_MIN_DETECTION_CONFIDENCE = 0.5
 MP_MIN_TRACKING_CONFIDENCE = 0.5
 MP_SMOOTH_WINDOW = 3
 
+# FOM 통합 video_json 기준 ref (cli extract → publish 또는 자동 복사)
+REF_ISOLATION_JSON_FILENAME = "ref_isolation.json"
+
 # 정렬: beat(음악 박자, 기본) | time(시각만)
 DEFAULT_ALIGNMENT_METHOD = "beat"
 
