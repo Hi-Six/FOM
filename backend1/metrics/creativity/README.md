@@ -7,34 +7,25 @@
 
 ### 반드시 맞출 것
 
-- [ ] **영상 전체 균등 샘플**: `--num-frames` 로 추출된 전체 프레임에서 동일 간격 샘플
-- [ ] (선택) **춤 시작 시점**: `--auto-detect-start` 또는 `--user-offset` / `--ref-offset`
-- [ ] **메인 댄서**: 화면 중앙 72% crop 후 MediaPipe (배경 인물 완화)
-- [ ] **신체 스케일**: Mid-Hip 원점 + torso 길이 정규화
-- [ ] **비교 특징**: `normalized_landmarks`, `joint_angles`, `bone_vectors`
+- [x] **동일 BGM 구간 샘플**: `--music-align`(기본 on) — 크로마로 `[시작, 끝]` 검출 후 그 안에서만 균등 샘플
+- [x] **샘플 밀도**: `--num-frames` 기본 **50** (파라미터로 변경 가능)
+- [x] **메인 댄서**: 화면 중앙 72% crop 후 MediaPipe
+- [x] **신체 스케일**: Mid-Hip 원점 + torso 길이 정규화
+- [x] **비교 특징**: `normalized_landmarks`, `joint_angles`, `bone_vectors`
 
 ### 가능하면 맞출 것
 
-- [ ] **미러 보정**: `--apply-mirror` (기본 on) — 좌우 관절 스왑
-- [ ] **정렬 방식**: `--alignment index|time|dtw` (템포 차이 시 `dtw`)
-- [ ] **visibility**: `--visibility-threshold 0.5` — 저품질 프레임 제외
+- [x] **미러 보정**: `--apply-mirror` (기본 on)
+- [x] **정렬**: `--alignment index|time|dtw` (기본 `dtw`, `dtw_mean_cost` 패널티)
+- [x] **기준선**: `--baseline` (기본 on) — ref vs ref 보정
+- [ ] **수동 offset**: `--user-offset` / `--ref-offset` 지정 시 음악 정렬 스킵
+- [ ] **포즈 시작 추정**: `--auto-detect-start` (음악 정렬과 동시 사용 안 함)
 
-### MVP 이후 (본 폴더 밖 협의)
+## 3단계 창의성 점수 (P0)
 
-- [ ] 같은 음악 **오디오 비트/온셋** 자동 동기화
-- [ ] YOLO 다인물 + 중앙 트래킹
-- [ ] 카메라 roll / 측면 시점 보정
-
-## 영상에서 추출하는 데이터
-
-| 필드 | 설명 |
-|------|------|
-| `landmarks` | 원본 33관절 + visibility (품질 필터용) |
-| `normalized_landmarks` | Mid-Hip·torso 정규화 좌표 |
-| `joint_angles` | 관절 각(도) — 시점에 강건 |
-| `bone_vectors` | 뼈 방향 벡터 |
-| `time_sec` | 원본 영상 기준 시각 (offset·time/dtw 정렬) |
-| `main_dancer_center_score` | 화면 중앙에 가까울수록 높음 |
+1. **이탈 band** — mean_divergence 양쪽 감쇠 (0.08~0.22 상승, 0.22~0.55=1, 0.55~0.85→0.15)
+2. **DTW 패널티** — cost ≤28→1, ≥42→0.25
+3. **ref vs ref 기준선** — `score = 100×(raw−baseline)/(1−baseline)`
 
 ## CLI
 
@@ -44,43 +35,66 @@ pip install -r requirements.txt
 $env:PYTHONPATH = (Get-Location).Path
 ```
 
-**MediaPipe 0.10.31+:** `mp.solutions` 가 없습니다. creativity 는 **Tasks API** 를 쓰며, 첫 실행 시 `models/pose_landmarker_lite.task` 를 자동 다운로드합니다.
+**MediaPipe 0.10.31+:** Tasks API 사용. 첫 실행 시 `models/pose_landmarker_lite.task` 자동 다운로드.
 
-### 출력 폴더 (기본)
+**오디오:** 음악 정렬에 `librosa` + `ffmpeg`(또는 `imageio-ffmpeg`) 필요.
 
-분석 결과는 **`metrics/creativity/output/`** 에 저장됩니다.
-
-| 경로 | 내용 |
-|------|------|
-| `output/creativity_score_YYYYMMDD_HHMMSS.json` | 창의성 점수 (기본, `-o` 생략 시) |
-| `output/extractions/user.creativity.json` | 사용자 추출 (기본 저장) |
-| `output/extractions/reference.creativity.json` | 레퍼런스 추출 |
-
-`output/` 는 `.gitignore` 로 Git 제외됩니다.
-
-### 영상 vs 영상 (CMD 한 줄)
+### 영상 vs 영상 (권장)
 
 ```cmd
 cd /d C:\ai-x\FOM\backend1
 set PYTHONPATH=C:\ai-x\FOM\backend1
-python -m metrics.creativity --user "C:\Users\804\Desktop\user.mp4" --reference "C:\Users\804\Desktop\ref.mp4" --num-frames 30 --alignment dtw --apply-mirror
+python -m metrics.creativity --user user.mp4 --reference ref.mp4 --num-frames 50 --alignment dtw
 ```
 
-`-o` / `--save-dir` 생략 시 `output/` 에 자동 저장. 터미널에는 **요약**만 출력되고, 상세는 JSON 파일에 저장됩니다. (`--json` 으로 전체 JSON stdout 가능)
+### 옵션 요약
 
-### 고정 파일명으로 저장
-
-```cmd
-python -m metrics.creativity --user user.mp4 --reference ref.mp4 --num-frames 30 --auto-detect-start --alignment dtw -o metrics\creativity\output\creativity_score.json
-```
+| 옵션 | 기본 | 설명 |
+|------|------|------|
+| `--num-frames` | 50 | 음악 구간 내 균등 샘플 수 |
+| `--music-align` / `--no-music-align` | on | 동일 BGM 크로마 구간 정렬 |
+| `--baseline` / `--no-baseline` | on | ref vs ref 기준선 |
+| `--with-accuracy` | off | 동일 파이프라인 정확도(참고) |
+| `--alignment` | dtw | index / time / dtw |
 
 ## 파이프라인
 
 ```text
-미디어 쌍 → 전체 프레임 추출(중앙 crop) → 영상 전체 균등 N프레임 샘플 → 미러·visibility
-  → index|time|dtw 정렬 → score_creativity (0~100)
+미디어 쌍 → 전체 프레임 추출(중앙 crop)
+  → music_align: [user_start, user_end], [ref_start, ref_end] (동일 곡 전제)
+  → preprocess: 구간 내 균등 N프레임(기본 50), 미러, visibility
+  → align (index|time|dtw) + dtw_mean_cost
+  → align(ref, ref) 기준선
+  → score_creativity(3단계) + (선택) score_accuracy
 ```
 
 ## 출력 JSON
 
-`inputs`, `preprocess`, `alignment`, `creativity` (score, breakdown, frame_diffs)
+`inputs`, `music_align`, `preprocess`, `alignment`, `creativity` (score, breakdown, frame_diffs), (선택) `accuracy`
+
+### breakdown 주요 필드 (P4)
+
+- `mean_divergence`, `divergence_band_factor`, `dtw_penalty_factor`, `effective_band_factor`
+- `combined_raw`, `baseline_combined_raw`, `combined_after_baseline`, `baseline_subtracted`
+- `dtw_mean_cost`, `divergence_thresholds`, `dtw_thresholds`
+
+## HTTP API (Swagger 테스트)
+
+서버 실행 후 `http://localhost:8000/docs` → 태그 **creativity**
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| `GET` | `/creativity/ready` | API 준비 상태 |
+| `POST` | `/creativity/analyze` | user + reference 영상/이미지 업로드 → 전체 파이프라인 |
+
+```bash
+cd C:\ai-x\FOM\backend1
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+Form 기본값: `num_frames=50`, `music_align=true`, `baseline=true`, `alignment=dtw`
+
+## 통합 API (별도)
+
+`POST /video/analyze` 에서 creativity 채점은 오케스트레이터(ROM 정렬) 경로입니다.  
+**음악 구간·50프레임·3단계 전체** 는 `POST /creativity/analyze` 또는 CLI를 사용하세요.

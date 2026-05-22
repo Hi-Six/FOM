@@ -125,14 +125,14 @@ def _frame_angle_vector(frame: dict[str, Any]) -> np.ndarray:
     )
 
 
-def _dtw_path(
+def _dtw_path_with_cost(
     seq_a: list[np.ndarray],
     seq_b: list[np.ndarray],
-) -> list[tuple[int, int]]:
-    """간단 DTW (프레임 수 ~수십 가정)."""
+) -> tuple[list[tuple[int, int]], float]:
+    """DTW 경로와 경로 상 평균 스텝 비용(L2)."""
     n, m = len(seq_a), len(seq_b)
     if n == 0 or m == 0:
-        return []
+        return [], 0.0
     inf = float("inf")
     dp = [[inf] * (m + 1) for _ in range(n + 1)]
     dp[0][0] = 0.0
@@ -141,8 +141,10 @@ def _dtw_path(
             cost = float(np.linalg.norm(seq_a[i - 1] - seq_b[j - 1]))
             dp[i][j] = cost + min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
     path: list[tuple[int, int]] = []
+    step_costs: list[float] = []
     i, j = n, m
     while i > 0 and j > 0:
+        step_costs.append(float(np.linalg.norm(seq_a[i - 1] - seq_b[j - 1])))
         path.append((i - 1, j - 1))
         candidates = [
             (dp[i - 1][j], i - 1, j),
@@ -151,7 +153,9 @@ def _dtw_path(
         ]
         _, i, j = min(candidates, key=lambda x: x[0])
     path.reverse()
-    return path
+    step_costs.reverse()
+    mean_cost = sum(step_costs) / len(step_costs) if step_costs else 0.0
+    return path, mean_cost
 
 
 def align_by_dtw(
@@ -159,7 +163,7 @@ def align_by_dtw(
     ref_frames: list[dict[str, Any]],
     user_offset_sec: float = 0.0,
     ref_offset_sec: float = 0.0,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], float]:
     user_active = [
         f for f in user_frames if float(f.get("time_sec", 0.0)) >= user_offset_sec
     ]
@@ -167,11 +171,11 @@ def align_by_dtw(
         f for f in ref_frames if float(f.get("time_sec", 0.0)) >= ref_offset_sec
     ]
     if not user_active or not ref_active:
-        return []
+        return [], 0.0
 
     user_seq = [_frame_angle_vector(f) for f in user_active]
     ref_seq = [_frame_angle_vector(f) for f in ref_active]
-    path = _dtw_path(user_seq, ref_seq)
+    path, mean_cost = _dtw_path_with_cost(user_seq, ref_seq)
 
     pairs: list[dict[str, Any]] = []
     seen_user: set[int] = set()
@@ -187,7 +191,7 @@ def align_by_dtw(
             "user": _frame_for_score(uf),
             "ref": _frame_for_score(rf),
         })
-    return pairs
+    return pairs, mean_cost
 
 
 def align_extractions(
@@ -199,6 +203,7 @@ def align_extractions(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     user_frames = user_extraction.get("frames") or []
     ref_frames = ref_extraction.get("frames") or []
+    dtw_mean_cost: float | None = None
 
     if method == "index":
         pairs = align_by_index(user_frames, ref_frames)
@@ -207,17 +212,19 @@ def align_extractions(
             user_frames, ref_frames, user_offset_sec, ref_offset_sec
         )
     elif method == "dtw":
-        pairs = align_by_dtw(
+        pairs, dtw_mean_cost = align_by_dtw(
             user_frames, ref_frames, user_offset_sec, ref_offset_sec
         )
     else:
         raise ValueError(f"지원하지 않는 alignment: {method}")
 
     dup = compute_duplicate_ratio(pairs)
-    meta = {
+    meta: dict[str, Any] = {
         "method": method,
         "pair_count": len(pairs),
         "duplicate_ref_ratio": dup,
         "warning": alignment_warning(dup, method),
     }
+    if dtw_mean_cost is not None:
+        meta["dtw_mean_cost"] = round(dtw_mean_cost, 4)
     return pairs, meta
