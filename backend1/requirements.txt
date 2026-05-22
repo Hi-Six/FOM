@@ -18,3 +18,4 @@ ultralytics>=8.3.0
 mediapipe[solutions]>=0.10.14
 
 librosa>=0.10.0
+tqdm>=4.0.0
