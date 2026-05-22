@@ -19,8 +19,8 @@ Requires
 
 Usage
 -----
-  python -m feature_accuracy.backend1.metrics.accuracy
-  python -m feature_accuracy.backend1.metrics.accuracy --video data/duet.mp4 --cache data/.cache_duet.npz
+  python -m metrics.accuracy
+  python -m metrics.accuracy --video data/duet.mp4 --cache data/.cache_duet.npz
 """
 
 import argparse
@@ -116,13 +116,15 @@ SKELETON_40 = [
 # ── Pose normalisation ──────────────────────────────────────────────────────
 # Inlined from dance_similarity/src/aihub_loader.py :: normalize_pose.
 
-def normalize_pose(kps: np.ndarray) -> np.ndarray:
+def normalize_pose(kps: np.ndarray):
     """
-    Return a normalised copy of kps (17, 3).
+    Return a normalised copy of kps (17, 3), or None if normalisation is impossible.
 
     Centres on the hip midpoint and scales by torso height (hip midpoint to
     shoulder midpoint). Invisible keypoints (v == 0) are kept as zeros so
     they do not contaminate the similarity calculation.
+    Returns None when both hip or both shoulder anchors are invisible, or when
+    torso height is degenerate — callers must skip such frames.
     """
     out     = kps.copy()
     visible = kps[:, 2] > 0
@@ -134,7 +136,7 @@ def normalize_pose(kps: np.ndarray) -> np.ndarray:
     elif visible[12]:
         hip_mid = kps[12, :2]
     else:
-        return out
+        return None
 
     if visible[5] and visible[6]:
         shoulder_mid = (kps[5, :2] + kps[6, :2]) / 2.0
@@ -143,11 +145,11 @@ def normalize_pose(kps: np.ndarray) -> np.ndarray:
     elif visible[6]:
         shoulder_mid = kps[6, :2]
     else:
-        return out
+        return None
 
     torso_h = np.linalg.norm(shoulder_mid - hip_mid)
     if torso_h < 1e-6:
-        return out
+        return None
 
     out[:, :2] = (kps[:, :2] - hip_mid) / torso_h
     out[~visible, :2] = 0.0
@@ -272,17 +274,21 @@ def compute_accuracy_score(poses_a: list, poses_b: list) -> dict:
 
 # ── Per-joint scoring ───────────────────────────────────────────────────────
 
-def per_joint_scores(pa: np.ndarray, pb: np.ndarray) -> np.ndarray:
+def per_joint_scores(pa, pb) -> np.ndarray:
     """
     Compute per-joint Gaussian similarity between two (17, 3) raw poses.
     Both poses are normalised (centred + torso-scale) before comparison,
     so position and body size are factored out.
 
-    Returns (17,) array; np.nan where either joint is invisible.
+    Accepts np.ndarray or any array-like (list-of-lists).
+    Returns (17,) array; np.nan where either joint is invisible or where
+    normalisation was impossible (degenerate frame — all anchors occluded).
     """
-    na     = normalize_pose(pa)
-    nb     = normalize_pose(pb)
+    na     = normalize_pose(np.asarray(pa, dtype=np.float32))
+    nb     = normalize_pose(np.asarray(pb, dtype=np.float32))
     scores = np.full(17, np.nan, dtype=np.float32)
+    if na is None or nb is None:
+        return scores          # frame skipped — all joints reported as NaN
     denom  = 2.0 * JOINT_TOLERANCE ** 2
     for i in range(17):
         if na[i, 2] > 0.1 and nb[i, 2] > 0.1:
@@ -370,9 +376,12 @@ def _annotate(img: np.ndarray, pa: np.ndarray, pb: np.ndarray,
 # ── NVENC check ─────────────────────────────────────────────────────────────
 
 def _nvenc_available() -> bool:
-    r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
-                       capture_output=True, text=True)
-    return "h264_nvenc" in r.stdout
+    try:
+        r = subprocess.run(["ffmpeg", "-hide_banner", "-encoders"],
+                           capture_output=True, text=True)
+        return "h264_nvenc" in r.stdout
+    except FileNotFoundError:
+        return False
 
 
 # ── Main renderer ────────────────────────────────────────────────────────────
@@ -414,6 +423,7 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
         "-movflags", "+faststart",
         str(out_path),
     ]
+    # outer try ensures cap.release() even if Popen or _nvenc_available raises
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
@@ -421,10 +431,9 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
     YELLOW = _score_bgr(0.70)
     RED    = _score_bgr(0.40)
 
+    pbar      = tqdm(total=n_frames, desc="Rendering joint-score video", unit="frame")
+    frame_idx = 0
     try:
-        pbar      = tqdm(total=n_frames, desc="Rendering joint-score video", unit="frame")
-        frame_idx = 0
-
         while frame_idx < n_frames:
             ret, frame = cap.read()
             if not ret:
@@ -458,6 +467,9 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
                 if lx > 0:
                     cv2.rectangle(bar, (lx, bar_h // 2 - sw // 2),
                                   (lx + sw, bar_h // 2 + sw // 2), col, -1)
+                    cv2.putText(bar, lbl, (lx + sw + 4, bar_h // 2 + 5),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.38,
+                                (255, 255, 255), 1, cv2.LINE_AA)
 
             cv2.putText(bar,
                         f"Overall sync: {overall:.1%}  |  frame {frame_idx:04d}",
@@ -465,7 +477,10 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
 
             out_frame = np.vstack([frame, bar])
-            proc.stdin.write(out_frame.tobytes())
+            try:
+                proc.stdin.write(out_frame.tobytes())
+            except BrokenPipeError:
+                break     # ffmpeg exited early (disk full / codec error)
 
             frame_idx += 1
             pbar.update(1)
