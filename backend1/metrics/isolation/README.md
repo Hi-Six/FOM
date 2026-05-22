@@ -21,7 +21,7 @@
 ```powershell
 cd backend1
 pip install -r requirements.txt
-python -m metrics.isolation.cli download
+python -m metrics.isolation.cli download   # ref + user(기본 Shorts 9kLf88IksZU)
 python -m metrics.isolation.cli extract   # → data/artifacts/ref.json (API 필수)
 ```
 
@@ -29,13 +29,43 @@ python -m metrics.isolation.cli extract   # → data/artifacts/ref.json (API 필
 
 기존에 `backend1/yolo11n.pt`만 있다면 `data/models/`로 옮기거나 삭제 후 재실행해도 됩니다.
 
+## 영상 URL (기본)
+
+| 역할 | URL |
+|------|-----|
+| 기준(ref) | [Shorts YzTywjy0VXU](https://www.youtube.com/shorts/YzTywjy0VXU) |
+| 사용자(user) | [Shorts 9kLf88IksZU](https://www.youtube.com/shorts/9kLf88IksZU) |
+
+**비교 구간**: 음악이 **시작된 시점**부터 ref **15초** (`REF_COMPARE_DURATION_SEC=15`). 영상 0초(무음·인트로)는 제외. CLI: `--ref-compare-sec 0` 이면 음악 시작~끝.
+
+## 음악(박자) 정렬
+
+기본 정렬은 **`beat`** 입니다. ref/user mp4 오디오에서 **음악 시작(`music_start_sec`)** 과 비트를 뽑고, 같은 박 인덱스끼리 포즈 프레임을 맞춥니다.
+
+- `ref_beats.json` 을 예전에 만들었다면 `cli beats` 를 다시 실행하세요 (`music_start_sec` 필드 필요).
+
+- **같은 곡**이어야 BPM·beat_lag가 의미 있습니다.
+- **ffmpeg** 가 PATH에 있어야 mp4 오디오를 읽을 수 있습니다.
+- 기준 비트 캐시: `data/artifacts/ref_beats.json` (`cli beats` 또는 첫 beat align 시 생성)
+
+시각만 맞출 때: `--alignment-method time`
+
 ## CLI
 
 ```powershell
 cd backend1
-python -m metrics.isolation.cli extract   # ref.json
 
-# 사용자 영상 → 터미널에 점수 JSON
+# 통합 검증 (추천): 음악 싱크 + 박자 정렬 + isolation 점수 + 채점 기준
+python -m metrics.isolation.cli verify
+python -m metrics.isolation.cli verify --json --out metrics/isolation/data/artifacts/verify_report.json
+
+# user.json 없을 때: 비트·싱크만 (가벼움)
+python -m metrics.isolation.cli verify --beats-only
+
+# 포즈 추출까지 한 번에 (느림)
+python -m metrics.isolation.cli verify --with-extract
+
+python -m metrics.isolation.cli extract   # ref.json
 python -m metrics.isolation.cli run --user-video metrics/isolation/data/raw/user.mp4 --json
 
 # ref/user JSON 만 있을 때 (extract 생략)

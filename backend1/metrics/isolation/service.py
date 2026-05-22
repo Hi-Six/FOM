@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from metrics.isolation.config import DATA_ARTIFACTS
+from metrics.isolation.config import DATA_ARTIFACTS, DEFAULT_ALIGNMENT_METHOD
 from metrics.isolation.pipeline.extract import extract_and_save
 from metrics.isolation.score import score_from_paths
 
@@ -31,6 +31,7 @@ def analyze_user_video(
     user_offset_sec: float = 0.0,
     ref_offset_sec: float = 0.0,
     auto_detect_start: bool = False,
+    alignment_method: str = DEFAULT_ALIGNMENT_METHOD,
     keep_user_json: bool = False,
 ) -> Dict[str, Any]:
     """
@@ -64,6 +65,8 @@ def analyze_user_video(
             user_offset_sec=user_offset_sec,
             ref_offset_sec=ref_offset_sec,
             auto_detect_start=auto_detect_start,
+            alignment_method=alignment_method,
+            user_video_path=video_path,
         )
     finally:
         shutil.rmtree(work, ignore_errors=True)

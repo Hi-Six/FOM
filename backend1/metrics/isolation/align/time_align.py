@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import bisect
 from collections import Counter
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from metrics.isolation.align.beat_detect import beats_for_extraction
+from metrics.isolation.align.compare_window import (
+    prepare_ref_compare_window,
+    prepare_user_compare_window,
+)
+from metrics.isolation.config import ALIGN_TO_MUSIC_START, DATA_RAW, REF_VIDEO_NAME
 from metrics.isolation.pipeline.io import get_frames, load_extraction_json, save_json
+
+DEFAULT_REF_VIDEO = DATA_RAW / REF_VIDEO_NAME
 
 MOTION_JOINTS = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
 MAX_LENGTH_RATIO = 10.0
@@ -53,6 +62,7 @@ def align_by_time(
     ref_frames: List[Dict[str, Any]],
     user_offset: float = 0.0,
     ref_offset: float = 0.0,
+    ref_max_sec: Optional[float] = None,
 ) -> List[Dict[str, Any]]:
     if not user_frames or not ref_frames:
         return []
@@ -61,7 +71,14 @@ def align_by_time(
         f for f in user_frames if float(f.get("time_sec", 0.0)) >= user_offset
     ]
     ref_active = [
-        f for f in ref_frames if float(f.get("time_sec", 0.0)) >= ref_offset
+        f
+        for f in ref_frames
+        if float(f.get("time_sec", 0.0)) >= ref_offset
+        and (
+            ref_max_sec is None
+            or ref_max_sec <= 0
+            or float(f.get("time_sec", 0.0)) <= ref_max_sec
+        )
     ]
     if not user_active or not ref_active:
         return []
@@ -113,9 +130,31 @@ def align_extractions(
     user_offset_sec: float = 0.0,
     ref_offset_sec: float = 0.0,
     auto_detect_start: bool = False,
+    ref_compare_duration_sec: Optional[float] = None,
+    ref_video_path: Optional[Path] = None,
+    user_video_path: Optional[Path] = None,
 ) -> Dict[str, Any]:
     user_frames = get_frames(user_data)
     ref_frames = get_frames(ref_data)
+
+    ref_music_start = 0.0
+    user_music_start = 0.0
+    if ALIGN_TO_MUSIC_START:
+        ref_bd = beats_for_extraction(
+            ref_data, video_override=ref_video_path or DEFAULT_REF_VIDEO
+        )
+        user_bd = beats_for_extraction(
+            user_data, video_override=user_video_path
+        )
+        ref_music_start = float(ref_bd.get("music_start_sec") or 0.0)
+        user_music_start = float(user_bd.get("music_start_sec") or 0.0)
+
+    ref_frames, _, ref_window_sec, ref_music_start = prepare_ref_compare_window(
+        ref_frames,
+        None,
+        duration_sec=ref_compare_duration_sec,
+        music_start_sec=ref_music_start,
+    )
 
     ratio = len(user_frames) / max(len(ref_frames), 1)
     if ratio > MAX_LENGTH_RATIO or ratio < 1.0 / MAX_LENGTH_RATIO:
@@ -127,7 +166,23 @@ def align_extractions(
     u_off, r_off = _resolve_offsets(
         user_frames, ref_frames, user_offset_sec, ref_offset_sec, auto_detect_start
     )
-    pairs = align_by_time(user_frames, ref_frames, u_off, r_off)
+    u_off = max(u_off, user_music_start)
+    r_off = max(r_off, ref_music_start)
+    user_frames_cmp = prepare_user_compare_window(
+        user_frames,
+        ref_window_sec,
+        music_start_sec=user_music_start,
+    )
+    ref_end = (
+        ref_music_start + ref_window_sec if ref_window_sec > 0 else None
+    )
+    pairs = align_by_time(
+        user_frames_cmp,
+        ref_frames,
+        u_off,
+        r_off,
+        ref_max_sec=ref_end,
+    )
     if not pairs:
         raise ValueError("정렬된 프레임 쌍이 없습니다. 오프셋을 확인하세요.")
 
@@ -142,6 +197,10 @@ def align_extractions(
     return {
         "alignment": {
             "method": "time",
+            "align_to_music_start": ALIGN_TO_MUSIC_START,
+            "ref_music_start_sec": round(ref_music_start, 4),
+            "user_music_start_sec": round(user_music_start, 4),
+            "ref_compare_duration_sec": ref_window_sec if ref_window_sec > 0 else None,
             "user_offset_sec": round(u_off, 4),
             "ref_offset_sec": round(r_off, 4),
             "auto_detect_start": auto_detect_start,

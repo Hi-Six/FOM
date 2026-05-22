@@ -35,7 +35,8 @@ def isolation_ready() -> dict:
     "/analyze",
     summary="사용자 영상 업로드 → isolation 점수",
     description=(
-        "YOLO11 track + MediaPipe Heavy 추출 후 기준 ref.json 과 time 정렬·채점. "
+        "YOLO11 track + MediaPipe Heavy 추출 후 기준 ref.json 과 beat(박자) 정렬·채점. "
+        "alignment_method=time 으로 시각 정렬만 사용 가능. "
         "6 metric 통합 analyze 와 별도 엔드포인트입니다."
     ),
 )
@@ -44,6 +45,7 @@ async def analyze_isolation(
     user_offset_sec: float = Form(0.0),
     ref_offset_sec: float = Form(0.0),
     auto_detect_start: bool = Form(False),
+    alignment_method: str = Form("beat"),
 ):
     ext = os.path.splitext(user_video.filename or "")[-1].lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -62,11 +64,18 @@ async def analyze_isolation(
             tmp_path = tmp.name
             tmp.write(content)
 
+        method = (alignment_method or "beat").strip().lower()
+        if method not in ("beat", "time"):
+            raise HTTPException(
+                status_code=400,
+                detail="alignment_method 는 'beat' 또는 'time' 이어야 합니다.",
+            )
         result = analyze_user_video(
             tmp_path,
             user_offset_sec=user_offset_sec,
             ref_offset_sec=ref_offset_sec,
             auto_detect_start=auto_detect_start,
+            alignment_method=method,
         )
     except FileNotFoundError as e:
         raise HTTPException(status_code=503, detail=str(e))

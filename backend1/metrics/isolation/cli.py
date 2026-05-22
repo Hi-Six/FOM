@@ -11,11 +11,15 @@ _BACKEND1 = Path(__file__).resolve().parents[2]
 if str(_BACKEND1) not in sys.path:
     sys.path.insert(0, str(_BACKEND1))
 
-from metrics.isolation.align.time_align import align_and_save
+from metrics.isolation.align import align_and_save, detect_beats_from_video, save_beat_map
 from metrics.isolation.config import (
     DATA_ARTIFACTS,
     DATA_RAW,
+    DEFAULT_ALIGNMENT_METHOD,
+    REF_COMPARE_DURATION_SEC,
     REF_VIDEO_NAME,
+    USER_VIDEO_NAME,
+    USER_VIDEO_URL,
     YOLO_MODEL,
 )
 from metrics.isolation.pipeline.extract import extract_and_save
@@ -32,18 +36,32 @@ def cmd_download(args: argparse.Namespace) -> None:
     from metrics.isolation.scripts.download_videos import download
     from metrics.isolation.config import REF_VIDEO_URL
 
+    force = getattr(args, "force", False)
+    if getattr(args, "ref_only", False):
+        ref_path = DATA_RAW / REF_VIDEO_NAME
+        print(f"[ref] {args.ref_url or REF_VIDEO_URL}")
+        download(args.ref_url or REF_VIDEO_URL, ref_path, force=force)
+        print(f"  → {ref_path.resolve()}")
+        return
+    if getattr(args, "user_only", False):
+        user_path = DATA_RAW / USER_VIDEO_NAME
+        user_url = args.user_url or USER_VIDEO_URL
+        print(f"[user] {user_url}")
+        download(user_url, user_path, force=force)
+        print(f"  → {user_path.resolve()}")
+        return
+
     ref_path = DATA_RAW / REF_VIDEO_NAME
     ref_path.parent.mkdir(parents=True, exist_ok=True)
     print(f"[ref] {args.ref_url or REF_VIDEO_URL}")
-    download(args.ref_url or REF_VIDEO_URL, ref_path)
+    download(args.ref_url or REF_VIDEO_URL, ref_path, force=force)
     print(f"  → {ref_path.resolve()}")
 
-    if args.user_url:
-        from metrics.isolation.scripts.download_videos import download as dl
-
-        user_path = DATA_RAW / "user.mp4"
-        print(f"[user] {args.user_url}")
-        dl(args.user_url, user_path)
+    if not args.no_user:
+        user_url = args.user_url or USER_VIDEO_URL
+        user_path = DATA_RAW / USER_VIDEO_NAME
+        print(f"[user] {user_url}")
+        download(user_url, user_path, force=force)
         print(f"  → {user_path.resolve()}")
 
 
@@ -134,6 +152,40 @@ def cmd_extract(args: argparse.Namespace) -> None:
     print(f"  saved: {out.resolve()}")
 
 
+def _align_kwargs(args: argparse.Namespace, *, user_video: Path | None = None) -> dict:
+    ref_dur = getattr(args, "ref_compare_sec", None)
+    if ref_dur is None:
+        ref_dur = REF_COMPARE_DURATION_SEC
+    kw: dict = {
+        "method": args.alignment_method,
+        "user_offset_sec": args.user_offset,
+        "ref_offset_sec": args.ref_offset,
+        "auto_detect_start": args.auto_detect_start,
+        "ref_compare_duration_sec": ref_dur,
+    }
+    if user_video is not None:
+        kw["user_video_path"] = user_video
+    return kw
+
+
+def cmd_beats(args: argparse.Namespace) -> None:
+    video = Path(args.video)
+    if not video.is_file():
+        print(f"영상 없음: {video}", file=sys.stderr)
+        sys.exit(1)
+    print(f"beats: {video}")
+    try:
+        data = detect_beats_from_video(video)
+    except Exception as e:
+        print(f"비트 추출 실패: {e}", file=sys.stderr)
+        print("ffmpeg 설치 여부를 확인하세요.", file=sys.stderr)
+        sys.exit(1)
+    out = Path(args.out)
+    save_beat_map(data, out)
+    print(f"  bpm~{data.get('bpm')} beats={data.get('beat_count')}")
+    print(f"  saved: {out.resolve()}")
+
+
 def cmd_align(args: argparse.Namespace) -> None:
     user_json = Path(args.user)
     ref_json = Path(args.ref)
@@ -142,18 +194,29 @@ def cmd_align(args: argparse.Namespace) -> None:
             print(f"JSON 없음: {p}", file=sys.stderr)
             sys.exit(1)
 
-    print(f"align: user={user_json.name} ref={ref_json.name}")
-    result = align_and_save(
-        user_json,
-        ref_json,
-        Path(args.out),
-        user_offset_sec=args.user_offset,
-        ref_offset_sec=args.ref_offset,
-        auto_detect_start=args.auto_detect_start,
-    )
+    print(f"align ({args.alignment_method}): user={user_json.name} ref={ref_json.name}")
+    try:
+        result = align_and_save(
+            user_json,
+            ref_json,
+            Path(args.out),
+            **_align_kwargs(args),
+        )
+    except Exception as e:
+        print(f"정렬 실패: {e}", file=sys.stderr)
+        sys.exit(1)
     align_meta = result["alignment"]
     print(f"  pairs: {align_meta['pair_count']}")
-    print(f"  offsets: user={align_meta['user_offset_sec']}s ref={align_meta['ref_offset_sec']}s")
+    if align_meta.get("method") == "beat":
+        print(
+            f"  beat_lag={align_meta.get('beat_lag_sec')}s "
+            f"ref_bpm={align_meta.get('ref_bpm')} user_bpm={align_meta.get('user_bpm')}"
+        )
+    else:
+        print(
+            f"  offsets: user={align_meta['user_offset_sec']}s "
+            f"ref={align_meta['ref_offset_sec']}s"
+        )
     if align_meta.get("warning"):
         print(f"  warning: {align_meta['warning']}")
     print(f"  saved: {Path(args.out).resolve()}")
@@ -211,19 +274,94 @@ def cmd_score(args: argparse.Namespace) -> None:
             if not p.is_file():
                 print(f"JSON 없음: {p}", file=sys.stderr)
                 sys.exit(1)
+        user_vp = Path(getattr(args, "user_video", None) or DATA_RAW / "user.mp4")
+        beat_video = (
+            user_vp
+            if args.alignment_method == "beat" and user_vp.is_file()
+            else None
+        )
         if not args.quiet and not args.json:
-            print(f"score: user={user_json.name} ref={ref_json.name}", file=sys.stderr)
+            print(
+                f"score ({args.alignment_method}): "
+                f"user={user_json.name} ref={ref_json.name}",
+                file=sys.stderr,
+            )
         result = score_from_paths(
             str(user_json),
             str(ref_json),
             aligned_out=str(args.aligned_out) if args.aligned_out else None,
             score_out=None,
+            alignment_method=args.alignment_method,
             user_offset_sec=args.user_offset,
             ref_offset_sec=args.ref_offset,
             auto_detect_start=args.auto_detect_start,
+            user_video_path=beat_video,
         )
 
     _emit_score_result(result, args)
+
+
+def cmd_verify(args: argparse.Namespace) -> None:
+    """beats + 음악 싱크 + (user.json 있으면) 정렬·isolation 점수·기준 통합 리포트."""
+    from metrics.isolation.verify import format_report_text, run_verify
+
+    ref_video = Path(args.ref_video)
+    user_video = Path(args.user_video)
+    user_json = Path(args.user_json)
+
+    if args.with_extract:
+        if not (DATA_ARTIFACTS / "ref.json").is_file() and ref_video.is_file():
+            _cli_log("=== verify: extract ref ===", json_mode=args.json)
+            extract_and_save(
+                ref_video,
+                DATA_ARTIFACTS / "ref.json",
+                reuse_yolo=True,
+                progress_every=args.progress_every,
+                device=args.device,
+            )
+        if user_video.is_file():
+            _cli_log("=== verify: extract user ===", json_mode=args.json)
+            tracks = Path(args.user_tracks) if args.user_tracks else DATA_ARTIFACTS / "user_tracks.json"
+            extract_and_save(
+                user_video,
+                user_json,
+                tracks_json_path=tracks if tracks.is_file() else None,
+                reuse_yolo=True,
+                progress_every=args.progress_every,
+                device=args.device,
+            )
+
+    report = run_verify(
+        ref_video=ref_video,
+        user_video=user_video,
+        user_json=user_json,
+        alignment_method=args.alignment_method,
+        ref_compare_duration_sec=args.ref_compare_sec,
+        user_offset_sec=args.user_offset,
+        ref_offset_sec=args.ref_offset,
+        auto_detect_start=args.auto_detect_start,
+        skip_beats_refresh=args.skip_beats_refresh,
+        run_pose_score=not args.beats_only,
+    )
+
+    if args.out:
+        save_json(report, args.out)
+        if not args.json:
+            print(f"saved: {Path(args.out).resolve()}", file=sys.stderr)
+
+    if args.json:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+    else:
+        print(format_report_text(report))
+
+    status = report.get("status", "fail")
+    if status == "fail":
+        sys.exit(1)
+    if status == "partial" and not args.json:
+        print(
+            "(status=partial: 음악 싱크는 OK, isolation 점수는 user.json 필요 — 빨간 줄은 WARN)",
+            file=sys.stderr,
+        )
 
 
 def cmd_run(args: argparse.Namespace) -> None:
@@ -260,15 +398,17 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     aligned_path = Path(args.aligned_out)
 
-    _cli_log("=== align ===", json_mode=jout)
-    align_and_save(
-        user_json,
-        ref_json,
-        aligned_path,
-        user_offset_sec=args.user_offset,
-        ref_offset_sec=args.ref_offset,
-        auto_detect_start=args.auto_detect_start,
-    )
+    _cli_log(f"=== align ({args.alignment_method}) ===", json_mode=jout)
+    try:
+        align_and_save(
+            user_json,
+            ref_json,
+            aligned_path,
+            **_align_kwargs(args, user_video=user_video),
+        )
+    except Exception as e:
+        print(f"정렬 실패: {e}", file=sys.stderr)
+        sys.exit(1)
     _cli_log(f"  → {aligned_path}", json_mode=jout)
 
     _cli_log("=== score ===", json_mode=jout)
@@ -286,7 +426,23 @@ def main() -> None:
 
     p_dl = sub.add_parser("download", help="기준(·user) 영상 다운로드")
     p_dl.add_argument("--ref-url", default=None)
-    p_dl.add_argument("--user-url", default=None)
+    p_dl.add_argument(
+        "--user-url",
+        default=None,
+        help=f"사용자 영상 URL (기본 config: {USER_VIDEO_URL})",
+    )
+    p_dl.add_argument(
+        "--no-user",
+        action="store_true",
+        help="사용자 영상 다운로드 생략 (ref 만)",
+    )
+    p_dl.add_argument("--ref-only", action="store_true", help="ref Shorts 만")
+    p_dl.add_argument("--user-only", action="store_true", help="user Shorts 만")
+    p_dl.add_argument(
+        "--force",
+        action="store_true",
+        help="기존 mp4 삭제 후 Shorts 다시 다운로드",
+    )
     p_dl.set_defaults(func=cmd_download)
 
     p_tr = sub.add_parser("track", help="YOLO11 트래킹")
@@ -308,11 +464,28 @@ def main() -> None:
     p_ex.set_defaults(func=cmd_extract)
 
     def _add_align_flags(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--alignment-method",
+            choices=("beat", "time"),
+            default=DEFAULT_ALIGNMENT_METHOD,
+            help="beat=음악 박자(기본), time=시각만",
+        )
+        p.add_argument(
+            "--ref-compare-sec",
+            type=float,
+            default=REF_COMPARE_DURATION_SEC,
+            help="기준(ref) 영상 앞 N초만 비교 (0=전체)",
+        )
         p.add_argument("--user-offset", type=float, default=0.0)
         p.add_argument("--ref-offset", type=float, default=0.0)
         p.add_argument("--auto-detect-start", action="store_true")
 
-    p_al = sub.add_parser("align", help="time 정렬 → aligned_pairs JSON")
+    p_bt = sub.add_parser("beats", help="영상에서 비트 맵 JSON 추출")
+    p_bt.add_argument("--video", type=Path, default=DATA_RAW / REF_VIDEO_NAME)
+    p_bt.add_argument("--out", type=Path, default=DATA_ARTIFACTS / "ref_beats.json")
+    p_bt.set_defaults(func=cmd_beats)
+
+    p_al = sub.add_parser("align", help="beat/time 정렬 → aligned_pairs JSON")
     p_al.add_argument("--user", type=Path, required=True)
     p_al.add_argument("--ref", type=Path, default=DATA_ARTIFACTS / "ref.json")
     p_al.add_argument("--out", type=Path, default=DATA_ARTIFACTS / "aligned_pairs.json")
@@ -326,6 +499,12 @@ def main() -> None:
     p_sc.add_argument("--pairs", type=Path, default=None, help="aligned_pairs.json")
     p_sc.add_argument("--user", type=Path, default=DATA_ARTIFACTS / "user.json")
     p_sc.add_argument("--ref", type=Path, default=DATA_ARTIFACTS / "ref.json")
+    p_sc.add_argument(
+        "--user-video",
+        type=Path,
+        default=None,
+        help="beat 정렬 시 오디오 소스 (기본 data/raw/user.mp4)",
+    )
     p_sc.add_argument("--aligned-out", type=Path, default=None, help="정렬 결과 저장")
     p_sc.add_argument(
         "--out",
@@ -370,6 +549,36 @@ def main() -> None:
     p_run.add_argument("--quiet", action="store_true", help="--json 아닐 때 요약만 최소 출력")
     _add_align_flags(p_run)
     p_run.set_defaults(func=cmd_run)
+
+    p_vf = sub.add_parser(
+        "verify",
+        help="통합 검증: 음악 싱크(beats) + 정렬 + isolation 점수 + 채점 기준",
+    )
+    p_vf.add_argument("--ref-video", type=Path, default=DATA_RAW / REF_VIDEO_NAME)
+    p_vf.add_argument("--user-video", type=Path, default=DATA_RAW / USER_VIDEO_NAME)
+    p_vf.add_argument("--user-json", type=Path, default=DATA_ARTIFACTS / "user.json")
+    p_vf.add_argument("--user-tracks", type=Path, default=None)
+    p_vf.add_argument(
+        "--with-extract",
+        action="store_true",
+        help="user/ref 포즈 JSON 없으면 extract 실행 (느림)",
+    )
+    p_vf.add_argument(
+        "--beats-only",
+        action="store_true",
+        help="비트·음악 싱크만 (user.json 불필요)",
+    )
+    p_vf.add_argument(
+        "--skip-beats-refresh",
+        action="store_true",
+        help="기존 ref_beats.json / user_beats.json 재사용",
+    )
+    p_vf.add_argument("--out", type=Path, default=None, help="리포트 JSON 저장")
+    p_vf.add_argument("--json", action="store_true", help="리포트 전체를 stdout JSON")
+    p_vf.add_argument("--device", default=None)
+    p_vf.add_argument("--progress-every", type=int, default=50)
+    _add_align_flags(p_vf)
+    p_vf.set_defaults(func=cmd_verify)
 
     args = parser.parse_args()
     args.func(args)
