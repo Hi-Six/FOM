@@ -203,9 +203,11 @@ multipart `analyze`의 Form `metrics`는 쉼표 구분 문자열 (`accuracy,crea
 
 `run_user_extractions_parallel(pipelines=[...])` 로 파이프라인 subset 가능. 라우터는 아직 Form `pipelines` 를 넘기지 않음 — 항상 `DEFAULT_EXTRACT_PIPELINES`.
 
-### 5.4 미포함
+### 5.4 isolation (통합 analyze)
 
-- **isolation 추출** (YOLO) — 파이프라인 목록에 없음. isolation **채점**은 ROM JSON 포즈로 `score_isolation` 시도.
+- **기본 추출** `DEFAULT_EXTRACT_PIPELINES`: rom, rhythm, power, creativity — **YOLO isolation 추출 없음** (속도).
+- **채점** (6 metric에 isolation 포함): ROM `aligned_pairs` → `score_isolation` (`breakdown.scoring_source=rom_aligned_pairs`).
+- **YOLO 추출**이 필요할 때만 `run_user_extractions_parallel(pipelines=[..., "isolation"])` 명시 → `{base}_isolation.json` → `score_isolation_for_fom`.
 
 ---
 
@@ -246,7 +248,7 @@ multipart `analyze`의 Form `metrics`는 쉼표 구분 문자열 (`accuracy,crea
 | ROM JSON 단일 입력 | power/rhythm/creativity 채점이 ROM `full_v1` 스키마에 의존. `rom_v1`만 있으면 일부 metric `breakdown.error` 가능 |
 | sidecar 미연동 | rhythm/power/creativity 추출 JSON은 저장되나 채점 입력으로 아직 미사용 |
 | creativity 정렬 | 통합 경로는 ROM `alignment` (time/dtw). creativity CLI 전용 `index` 정렬은 오케스트레이터에 없음 |
-| isolation 추출 | 병렬 추출 파이프라인 미구현 |
+| isolation 추출 | 통합 analyze 기본 스킵. `pipelines`에 isolation 명시 시만 YOLO |
 | 의존성 | rhythm 라우터 import 시 `librosa` 필요 — `pip install -r requirements.txt` |
 | `metrics/rom/main.py` | 사용하지 않음. ROM path는 `backend1/main.py`에서만 `sys.path` 설정 |
 

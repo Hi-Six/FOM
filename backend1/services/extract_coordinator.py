@@ -27,7 +27,14 @@ DEFAULT_EXTRACT_PIPELINES: tuple[ExtractPipeline, ...] = (
     "creativity",
 )
 
-_executor = ThreadPoolExecutor(max_workers=5)
+# _pipeline_fn 이 구현한 파이프라인 — 검증·오류 메시지용
+# 통합 analyze 기본은 isolation(YOLO) 미실행 — 채점은 orchestrator가 ROM aligned_pairs 사용
+# YOLO 추출이 필요하면 run_user_extractions_parallel(pipelines=[..., "isolation"]) 명시
+SUPPORTED_EXTRACT_PIPELINES: tuple[ExtractPipeline, ...] = DEFAULT_EXTRACT_PIPELINES + (
+    "isolation",
+)
+
+_executor = ThreadPoolExecutor(max_workers=len(SUPPORTED_EXTRACT_PIPELINES))
 
 _CREATIVITY_NUM_FRAMES = 30
 
@@ -166,7 +173,10 @@ def _pipeline_fn(
         return lambda: _run_creativity_extract(video_path)
     if name == "isolation":
         return lambda: _run_isolation_extract(video_path)
-    raise ValueError(f"지원하지 않는 추출 파이프라인: {name}")
+    raise ValueError(
+        f"지원하지 않는 추출 파이프라인: {name}. "
+        f"허용: {list(SUPPORTED_EXTRACT_PIPELINES)}"
+    )
 
 
 async def _run_in_executor(fn: Callable[[], Dict[str, Any]]) -> Dict[str, Any]:
@@ -200,12 +210,11 @@ async def run_user_extractions_parallel(
         rom_mode = extraction_mode if extraction_mode == "full" else "rom"
 
     active = list(pipelines) if pipelines else list(DEFAULT_EXTRACT_PIPELINES)
-    if scoring_metrics and "isolation" in scoring_metrics and "isolation" not in active:
-        active.append("isolation")
-    invalid = [p for p in active if p not in DEFAULT_EXTRACT_PIPELINES]
+    invalid = [p for p in active if p not in SUPPORTED_EXTRACT_PIPELINES]
     if invalid:
         raise ValueError(
-            f"지원하지 않는 추출 파이프라인: {invalid}. 허용: {list(DEFAULT_EXTRACT_PIPELINES)}"
+            f"지원하지 않는 추출 파이프라인: {invalid}. "
+            f"허용: {list(SUPPORTED_EXTRACT_PIPELINES)}"
         )
     if "rom" not in active:
         active = ["rom", *active]

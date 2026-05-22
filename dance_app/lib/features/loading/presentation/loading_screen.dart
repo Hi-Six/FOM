@@ -74,13 +74,7 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
     ref.read(videoAnalyzeResultProvider.notifier).state = null;
 
     try {
-      final healthy = await VideoAnalyzeApi.checkHealth();
-      if (!healthy) {
-        throw VideoAnalyzeApiException(
-          'backend1 서버에 연결할 수 없습니다.\n'
-          'cd backend1 && uvicorn main:app --host 0.0.0.0 --port 8000',
-        );
-      }
+      await VideoAnalyzeApi.ensureBackendReachable();
 
       final refJson = session?.referenceJson ?? '';
       final expertAsset = session?.referenceVideoPath ?? '';
@@ -99,6 +93,7 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
         result = await VideoAnalyzeApi.analyzeServerDevVideo(
           userVideoFilename: serverMp4,
           referenceJson: refJson,
+          referenceJsonAsset: session?.referenceJsonAsset ?? '',
           expertVideoDisplayUrl: expertAsset,
           referenceVideoFilename: serverMp4,
           userAssetVideoUrl: expertAsset,
@@ -109,6 +104,7 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
         result = await VideoAnalyzeApi.analyzeVideo(
           userVideoPath: session!.userVideoPath,
           referenceJson: refJson,
+          referenceJsonAsset: session.referenceJsonAsset,
           expertVideoDisplayUrl: expertAsset,
           referenceVideoFilename:
               serverRef.isNotEmpty ? serverRef : null,

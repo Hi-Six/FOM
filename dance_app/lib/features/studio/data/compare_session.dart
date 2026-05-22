@@ -7,8 +7,11 @@ class CompareSession {
   /// 챌린지 asset MP4 (Studio·Report 전문가 미리보기).
   final String referenceVideoPath;
 
-  /// `POST /video/analyze` Form `reference_json`.
+  /// `POST /video/analyze` Form `reference_json` (저장 파일명).
   final String referenceJson;
+
+  /// `video_data/cardN/*.json` asset 경로 — `reference_json_file` 업로드.
+  final String referenceJsonAsset;
 
   /// 서버 `video_data/` 사용자 MP4 파일명 (by-name).
   final String serverUserVideoFilename;
@@ -20,6 +23,7 @@ class CompareSession {
     required this.userVideoPath,
     this.referenceVideoPath = '',
     required this.referenceJson,
+    this.referenceJsonAsset = '',
     this.serverUserVideoFilename = '',
     this.useDevServerVideo = false,
   });
@@ -33,6 +37,7 @@ class CompareSession {
       userVideoPath: userVideoPath,
       referenceVideoPath: challenge.videoUrl,
       referenceJson: challenge.referenceJson,
+      referenceJsonAsset: challenge.referenceJsonAsset,
       serverUserVideoFilename: challenge.serverVideoFilename,
       useDevServerVideo: useDevServerVideo,
     );
@@ -43,6 +48,7 @@ class CompareSession {
         userVideoPath: '',
         referenceVideoPath: challenge.videoUrl,
         referenceJson: challenge.referenceJson,
+        referenceJsonAsset: challenge.referenceJsonAsset,
         serverUserVideoFilename: challenge.serverVideoFilename,
         useDevServerVideo: true,
       );
