@@ -23,6 +23,7 @@ from domain.domain1.hub.services.extraction_pipeline import (
 from domain.domain1.hub.services.video_input import acquire_video_to_temp
 from domain.domain1.hub.services.storage_paths import (
     load_extraction_json,
+    save_reference_json_bytes,
     validate_filename,
     video_path,
 )
@@ -96,6 +97,41 @@ def _parse_metrics_form(metrics: Optional[str]) -> Optional[list[str]]:
     if not metrics or not str(metrics).strip():
         return None
     return [m.strip() for m in metrics.split(",") if m.strip()]
+
+
+def _basename_json_name(upload_filename: Optional[str]) -> str:
+    base = os.path.basename((upload_filename or "").strip())
+    if not base:
+        raise ValueError("reference_json_file 파일명이 비어 있습니다.")
+    if not base.endswith(".json"):
+        base = f"{base}.json"
+    return base
+
+
+async def resolve_reference_json_for_analyze(
+    reference_json: str,
+    reference_json_file: Optional[UploadFile],
+) -> str:
+    """
+    레퍼런스 JSON 확보: multipart 업로드 우선, 없으면 video_json/ 기존 파일.
+    dance_app video_data/cardN/*.json 업로드용.
+    """
+    name = (reference_json or "").strip()
+
+    if reference_json_file is not None:
+        raw = await reference_json_file.read()
+        if not name:
+            name = _basename_json_name(reference_json_file.filename)
+        validate_filename(name)
+        return save_reference_json_bytes(raw, name)
+
+    if not name:
+        raise ValueError(
+            "reference_json 파일명 또는 reference_json_file 업로드가 필요합니다."
+        )
+    validate_filename(name)
+    load_extraction_json(name)
+    return name
 
 
 async def _run_video_analyze_pipeline(
@@ -194,7 +230,8 @@ async def _run_video_analyze_pipeline(
     summary="유저 영상 업로드 + 레퍼런스 JSON 채점 (권장)",
     description=(
         "사용자 동영상: multipart file 또는 video_url(HTTP(S) 직링크) 중 하나. "
-        "reference_json은 video_json/에 미리 저장된 전문가 추출 JSON 파일명입니다. "
+        "reference_json: 저장 파일명. reference_json_file: 앱 asset 등 JSON 업로드(우선). "
+        "둘 중 하나 이상 필요. 업로드 시 video_json/에 저장 후 채점. "
         "Phase A: metric별 추출 병렬(rom/rhythm/power/creativity). "
         "Phase B: 오케스트레이터 6 metric 채점. "
         "metrics 생략 시 6개 metric 전체 채점. "
@@ -210,8 +247,12 @@ async def analyze_video(
         description="사용자 영상 HTTP(S) URL (user_video와 택1, mp4/mov 등 직링크)",
     ),
     reference_json: str = Form(
-        ...,
-        description="video_json/ 레퍼런스 추출 JSON 파일명",
+        "",
+        description="video_json/ 저장 파일명 (reference_json_file 업로드 시 동일 이름 권장)",
+    ),
+    reference_json_file: Optional[UploadFile] = File(
+        None,
+        description="dance_app video_data/cardN 레퍼런스 추출 JSON (multipart)",
     ),
     alignment_method: Literal["time", "dtw"] = Form("time"),
     user_offset_sec: float = Form(0.0),
@@ -248,6 +289,9 @@ async def analyze_video(
 ):
     tmp_path = None
     try:
+        ref_json_name = await resolve_reference_json_for_analyze(
+            reference_json, reference_json_file
+        )
         tmp_path, _ = await acquire_video_to_temp(
             upload=user_video, video_url=video_url
         )
@@ -256,7 +300,7 @@ async def analyze_video(
 
         content = await _run_video_analyze_pipeline(
             tmp_path,
-            reference_json,
+            ref_json_name,
             reference_video_filename=reference_video_filename,
             alignment_method=alignment_method,
             user_offset_sec=user_offset_sec,
@@ -291,7 +335,7 @@ async def analyze_video(
     description=(
         "에뮬레이터·로컬 개발용. user_video_filename은 "
         "metrics/rom/domain/domain1/video_data/ 아래 파일명만 허용. "
-        "기본값: gBR_sBM_c01_d04_mBR3_ch03.mp4 + 20260521_134352_bed9b6d2.json. "
+        "reference_json_file 로 앱 asset JSON 업로드 가능. "
         "상세: metrics/docs/DEV_VIDEO_DATASET.md"
     ),
 )
@@ -301,8 +345,12 @@ async def analyze_video_by_name(
         description="video_data/ 사용자(개발) MP4 파일명",
     ),
     reference_json: str = Form(
-        "20260521_134352_bed9b6d2.json",
-        description="video_json/ 전문가(레퍼런스) 추출 JSON",
+        "",
+        description="video_json/ 저장 파일명 (reference_json_file 과 쌍)",
+    ),
+    reference_json_file: Optional[UploadFile] = File(
+        None,
+        description="dance_app video_data/cardN 레퍼런스 JSON",
     ),
     alignment_method: Literal["time", "dtw"] = Form("time"),
     user_offset_sec: float = Form(0.0),
@@ -329,12 +377,15 @@ async def analyze_video_by_name(
             raise FileNotFoundError(
                 f"video_data에 영상이 없습니다: {user_video_filename}"
             )
+        ref_json_name = await resolve_reference_json_for_analyze(
+            reference_json, reference_json_file
+        )
         ref_video = (reference_video_filename or "").strip() or user_video_filename
         metrics_list = _parse_metrics_form(metrics)
         effective_target = target_fps if target_fps and target_fps > 0 else None
         content = await _run_video_analyze_pipeline(
             str(local_path),
-            reference_json,
+            ref_json_name,
             reference_video_filename=ref_video,
             user_server_video_filename=user_video_filename,
             alignment_method=alignment_method,

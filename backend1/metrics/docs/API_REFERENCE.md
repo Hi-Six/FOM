@@ -56,7 +56,8 @@ uvicorn main:app --host 0.0.0.0 --port 8000
 |------|------|------|------|
 | `user_video` | UploadFile | — | 유저 영상 (`video_url` 과 택1) |
 | `video_url` | Form string | — | 유저 영상 URL |
-| `reference_json` | Form string | **필수** | `video_json/` 레퍼런스 파일명 |
+| `reference_json` | Form string | 업로드 시 파일명 | `video_json/` 저장명 (asset과 동일 권장) |
+| `reference_json_file` | multipart file | 선택 | dance_app `video_data/cardN/*.json` — 있으면 서버에 저장 후 채점 |
 | `alignment_method` | `time` \| `dtw` | `time` | 프레임 정렬 |
 | `user_offset_sec` / `ref_offset_sec` | float | `0` | 시작 오프셋(초) |
 | `auto_detect_start` | bool | `false` | 댄스 시작 자동 감지 |

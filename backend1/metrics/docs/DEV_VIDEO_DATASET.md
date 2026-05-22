@@ -112,7 +112,7 @@ video_data/gBR_sBM_c01_d04_mBR3_ch03.mp4
 ```
 
 Studio **레퍼런스 미리보기**는 홈에서 고른 챌린지 asset 영상이고,  
-**채점 API**의 `reference_json` 은 위 **서버 JSON** 입니다. (미리보기 URL ≠ reference_json)
+**채점 API**의 `reference_json` 은 저장 파일명이며, **dance_app** 은 `video_data/cardN/<referenceJson>` 을 **`reference_json_file`** multipart 로 업로드합니다. (서버 `video_json/` 사전 복사 불필요)
 
 ---
 

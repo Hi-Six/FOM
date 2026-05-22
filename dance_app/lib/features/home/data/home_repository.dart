@@ -9,7 +9,7 @@ class DanceVideo {
   /// Flutter asset — `video_data/cardN/xxx.mp4`
   final String videoUrl;
 
-  /// 서버 `video_json/` 파일명 (`POST /video/analyze` reference_json).
+  /// 서버 `video_json/` 저장 파일명 + multipart `reference_json` 필드.
   final String referenceJson;
 
   /// 서버 `video_data/` MP4 파일명 (개발 by-name·전문가 스트리밍용).
@@ -30,6 +30,15 @@ class DanceVideo {
     required this.artist,
     required this.durationSeconds,
   });
+}
+
+extension DanceVideoAssets on DanceVideo {
+  /// Flutter asset — `video_data/cardN/<referenceJson>` (서버 업로드용).
+  String get referenceJsonAsset {
+    final slash = videoUrl.lastIndexOf('/');
+    if (slash < 0) return referenceJson;
+    return '${videoUrl.substring(0, slash + 1)}$referenceJson';
+  }
 }
 
 class HomeRepository {

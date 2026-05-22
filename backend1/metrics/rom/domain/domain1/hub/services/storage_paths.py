@@ -41,6 +41,36 @@ def video_path(filename: str) -> Path:
     return VIDEO_DATA_DIR / filename
 
 
+def save_reference_json_bytes(raw: bytes, filename: str) -> str:
+    """
+    앱 asset 등에서 업로드한 레퍼런스 JSON을 video_json/에 저장.
+    반환: 저장된 파일명 (채점 시 reference_json 으로 사용).
+    """
+    if not raw:
+        raise ValueError("reference_json_file이 비어 있습니다.")
+    validate_filename(filename)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ValueError(f"reference_json_file UTF-8 디코딩 오류: {e}") from e
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"reference_json_file JSON 파싱 오류: {e}") from e
+    if not isinstance(data, dict):
+        raise ValueError("reference_json_file은 JSON 객체여야 합니다.")
+    if "frames" not in data and data.get("schema") not in (
+        EXTRACTION_SCHEMA_ROM,
+        "full_v1",
+        "rom_v1",
+    ):
+        raise ValueError(
+            "reference_json_file: 'frames' 또는 지원 schema(rom_v1/full_v1)가 필요합니다."
+        )
+    save_extraction_json(data, filename)
+    return filename
+
+
 def save_extraction_json(data: Dict[str, Any], filename: str) -> Path:
     """추출 결과를 video_json에 저장 (응답 전용 필드 제외)."""
     ensure_storage_dirs()

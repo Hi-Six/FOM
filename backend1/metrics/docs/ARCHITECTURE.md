@@ -454,7 +454,9 @@ flowchart LR
 | 항목 | 내용 |
 |------|------|
 | 호출 | `POST /video/analyze` Phase A 만 |
-| 기본 파이프라인 | `rom`, `rhythm`, `power`, `creativity` (병렬, max 4 workers) |
+| 기본 파이프라인 | `rom`, `rhythm`, `power`, `creativity` (병렬) |
+| isolation 추출 | 통합 analyze 기본 **스킵**. `pipelines`에 `isolation` 명시 시만 YOLO sidecar |
+| isolation 채점 | 기본: ROM `aligned_pairs` → `score_isolation`. sidecar 있으면 `score_isolation_for_fom` |
 | canonical | ROM `{base}.json` → Phase B `user_json` |
 | sidecar | `{base}_rhythm.json`, `{base}_power.json`, `{base}_creativity.json` (저장만, 채점 미연동) |
 | ROM `full` 승격 | 채점 metric 에 accuracy/creativity/isolation/power/rhythm 포함 시 자동 |
