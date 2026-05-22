@@ -188,17 +188,7 @@ yarn-error.log*
 
 dance_app/video_data/
 
-# --- backend1 / metrics — isolation ---
-backend1/metrics/isolation/data/raw/*
-!backend1/metrics/isolation/data/raw/.gitignore
-!backend1/metrics/isolation/data/raw/.gitkeep
-
-backend1/metrics/isolation/data/artifacts/*
-!backend1/metrics/isolation/data/artifacts/.gitkeep
-
-backend1/metrics/isolation/data/models/*
-!backend1/metrics/isolation/data/models/.gitignore
-!backend1/metrics/isolation/data/models/.gitkeep
+# isolation data: backend1/metrics/isolation/.gitignore
 
 # --- backend1 / metrics — ROM (영상·추출 JSON) ---
 backend1/metrics/rom/**/video_data/*
