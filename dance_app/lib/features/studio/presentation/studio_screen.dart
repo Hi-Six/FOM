@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import '../../../core/config/api_config.dart';
 import '../../../core/theme/app_theme.dart';
 import '../../../shared/widgets/card_video_preview.dart';
 import '../../home/data/home_repository.dart';
@@ -61,29 +62,32 @@ class StudioScreen extends ConsumerWidget {
                   _openRecord(context, ref);
                 },
                 onAnalyze: () {
-                  final session = ref.read(compareSessionProvider);
-                  if (session != null) {
+                  final selected = ref.read(selectedChallengeProvider);
+                  if (selected == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('홈에서 챌린지를 먼저 선택해 주세요')),
+                    );
+                    return;
+                  }
+                  if (ApiConfig.useDevServerUserVideo) {
+                    final session = CompareSession.devServer(selected);
+                    ref.read(compareSessionProvider.notifier).state = session;
                     context.go('/loading', extra: session);
                     return;
                   }
                   final path = ref.read(userVideoPathProvider);
-                  final refPath = challenge?.videoUrl;
-                  if (path != null &&
-                      path.isNotEmpty &&
-                      refPath != null &&
-                      refPath.isNotEmpty) {
-                    context.go(
-                      '/loading',
-                      extra: CompareSession(
-                        userVideoPath: path,
-                        referenceVideoPath: refPath,
-                      ),
+                  if (path == null || path.isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('먼저 따라하며 촬영을 완료해 주세요')),
                     );
                     return;
                   }
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('먼저 따라하며 촬영을 완료해 주세요')),
+                  final session = CompareSession.fromChallenge(
+                    selected,
+                    userVideoPath: path,
                   );
+                  ref.read(compareSessionProvider.notifier).state = session;
+                  context.go('/loading', extra: session);
                 },
               ),
             ),

@@ -1,10 +1,18 @@
-# Backend 문서
+# ROM metric
 
-Dance AI 백엔드 아키텍처 및 운영 가이드입니다.
+HTTP API는 **통합 서버**에서 제공합니다.
 
-| 문서 | 설명 |
-|------|------|
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | 전체 구조, Hub/Spoke, 도메인 레이어, Flutter 연동 |
-| [DOMAIN_LAYERS.md](./DOMAIN_LAYERS.md) | `hub` / `spokes` / `models` 디렉터리별 역할 상세 |
+```bash
+cd backend1
+uvicorn main:app --host 0.0.0.0 --port 8000
+```
 
-> 현재 `backend/`는 **디렉터리 스캐폴드** 단계이며, API 엔트리포인트·비즈니스 로직 구현은 진행 전입니다.
+## 이 폴더에서 수정하는 범위
+
+- `domain/domain1/` — 추출·채점 로직 (ROM 담당)
+- `domain/domain1/docs/` — ROM 설계 문서
+
+## 수정하지 않는 범위
+
+- `backend1/routers/video.py` — 통합 라우터 (오케스트레이션 담당)
+- 다른 `metrics/<이름>/` 폴더

@@ -3,7 +3,9 @@
 > **목적:** 추출·정규화·비교 파이프라인의 실제 동작과 한계 명세  
 > **대상:** 개발팀, QA, 채점 로직 확장 담당자  
 > **작성일:** 2026-05-20  
-> **최종 갱신:** 2026-05-20 — `COMPARE_SOLUTION.md` Phase 1·2 반영
+> **최종 갱신:** 2026-05-21 — ROM 경량 추출(`rom_v1`)·`enable_accuracy` 기본값 반영  
+> **성능:** [ROM_EXTRACTION_PERFORMANCE.md](./ROM_EXTRACTION_PERFORMANCE.md)  
+> **기술·라이브러리 총정리:** [ROM_IMPLEMENTATION_TECH.md](./ROM_IMPLEMENTATION_TECH.md)
 
 ---
 

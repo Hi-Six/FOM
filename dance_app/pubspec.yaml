@@ -21,6 +21,8 @@ dependencies:
   lottie: ^3.3.1
   shared_preferences: ^2.5.3
   percent_indicator: ^4.2.3
+  http: ^1.2.2
+  cross_file: ^0.3.4+2
 
 dev_dependencies:
   flutter_test:
@@ -34,4 +36,8 @@ flutter:
   assets:
     - assets/lottie/
     - assets/images/
-    - video_data/
+    - video_data/card1/
+    - video_data/card2/
+    - video_data/card3/
+    - video_data/card4/
+    - video_data/card5/
