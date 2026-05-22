@@ -1,0 +1,7 @@
+# CLI 분석 결과·추출 JSON (로컬 테스트용, Git 제외)
+*
+!.gitignore
+!.gitkeep
+!extractions/
+extractions/*
+!extractions/.gitkeep

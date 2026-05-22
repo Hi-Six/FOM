@@ -24,14 +24,41 @@ MOTION_JOINTS = ("left_shoulder", "right_shoulder", "left_hip", "right_hip")
 DUPLICATE_RATIO_WARN_THRESHOLD = 0.3
 
 
+def detect_dance_start_from_joint_angles(
+    frames: List[Dict[str, Any]],
+    angle_delta_threshold_deg: float = 3.0,
+) -> float:
+    """rom_v1 등 joint_angles만 있을 때 — 주요 관절 각 변화로 시작 시점 추정."""
+    prev_angles: Optional[Dict[str, float]] = None
+    for frame in frames:
+        angles = frame.get("joint_angles") or {}
+        if not angles:
+            continue
+        if prev_angles is None:
+            prev_angles = {k: float(v) for k, v in angles.items()}
+            continue
+        deltas: List[float] = []
+        for key in DTW_ANGLE_KEYS:
+            if key not in angles or key not in prev_angles:
+                continue
+            deltas.append(abs(float(angles[key]) - prev_angles[key]))
+        if deltas and sum(deltas) / len(deltas) > angle_delta_threshold_deg:
+            return float(frame.get("time_sec", 0.0))
+        prev_angles = {k: float(v) for k, v in angles.items()}
+    return 0.0
+
+
 def detect_dance_start(
     frames: List[Dict[str, Any]],
     motion_threshold: float = 0.01,
 ) -> float:
     """
-    연속 프레임 normalized_landmarks 변화량이 threshold를 넘는 첫 시점(초).
-    실패 시 0.0.
+    춤 시작 시점(초). normalized_landmarks가 있으면 위치 변화,
+    없으면 joint_angles 변화(rom_v1)로 추정.
     """
+    if frames and not frames[0].get("normalized_landmarks"):
+        return detect_dance_start_from_joint_angles(frames)
+
     prev: Optional[Dict[str, Any]] = None
     for frame in frames:
         lms = frame.get("normalized_landmarks") or {}

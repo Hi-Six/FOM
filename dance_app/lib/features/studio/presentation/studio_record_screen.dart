@@ -191,9 +191,9 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
       return;
     }
 
-    final session = CompareSession(
+    final session = CompareSession.fromChallenge(
+      challenge,
       userVideoPath: recorded.path,
-      referenceVideoPath: challenge.videoUrl,
     );
 
     ref.read(userVideoPathProvider.notifier).state = recorded.path;

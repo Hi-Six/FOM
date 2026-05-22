@@ -43,6 +43,59 @@ def ensure_video_data_dir() -> Path:
     return VIDEO_DATA_DIR
 
 
+MAX_ANNOTATED_WIDTH = 1280
+# 이전 avc1 기본 출력은 ~75MB/2초 수준으로 모바일 스트리밍·재생에 불리함.
+MAX_ANNOTATED_CACHE_BYTES = 15 * 1024 * 1024
+
+
+def _open_video_writer(
+    output_path: Path, fps: float, size: tuple[int, int]
+) -> cv2.VideoWriter | None:
+    """용량·호환: mp4v 우선(기존 ~7MB 수준), 이후 H.264."""
+    for codec in ("mp4v", "avc1", "H264"):
+        fourcc = cv2.VideoWriter_fourcc(*codec)
+        writer = cv2.VideoWriter(str(output_path), fourcc, fps, size)
+        if writer.isOpened():
+            return writer
+        writer.release()
+    return None
+
+
+def _annotated_output_fps(
+    cap: cv2.VideoCapture,
+    frames_data: List[dict],
+    extraction_result: dict,
+) -> float:
+    """샘플 프레임 수에 맞춰 원본 영상 길이와 동일하게 재생되도록 fps 산출."""
+    src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 30.0)
+    total = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 1.0)
+    src_dur = total / src_fps if src_fps > 0 else 1.0
+    n = max(1, len(frames_data))
+    if src_dur > 0:
+        return max(1.0, min(30.0, n / src_dur))
+    target = extraction_result.get("extraction_target_fps")
+    if target is not None and float(target) > 0:
+        return float(target)
+    stride = int(extraction_result.get("sample_stride") or 1)
+    if stride > 1 and src_fps > 0:
+        return max(1.0, src_fps / stride)
+    return 15.0
+
+
+def _scale_output_size(width: int, height: int) -> tuple[int, int]:
+    if width <= MAX_ANNOTATED_WIDTH:
+        return width, height
+    scale = MAX_ANNOTATED_WIDTH / width
+    return int(width * scale), int(height * scale)
+
+
+def _resize_frame(frame: np.ndarray, out_w: int, out_h: int) -> np.ndarray:
+    h, w = frame.shape[:2]
+    if w == out_w and h == out_h:
+        return frame
+    return cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_AREA)
+
+
 def _lm_pixel(lm: dict, w: int, h: int) -> Tuple[int, int]:
     return int(lm["x"] * w), int(lm["y"] * h)
 
@@ -253,8 +306,13 @@ def render_annotated_video(
     ensure_video_data_dir()
     output_path = VIDEO_DATA_DIR / output_filename
 
+    if extraction_result.get("schema") == "rom_v1":
+        raise ValueError(
+            "rom_v1 추출본은 annotated MP4를 생성하지 않습니다. "
+            "include_annotated_video=True 또는 extraction_mode=full 로 추출하세요."
+        )
+
     frames_data: List[dict] = extraction_result["frames"]
-    fps = float(extraction_result.get("fps") or 30.0)
 
     cap = cv2.VideoCapture(source_video_path)
     if not cap.isOpened():
@@ -262,22 +320,27 @@ def render_annotated_video(
 
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    out_w = w + PANEL_WIDTH
-    out_h = h
+    out_w, out_h = _scale_output_size(w + PANEL_WIDTH, h)
+    fps = _annotated_output_fps(cap, frames_data, extraction_result)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    writer = cv2.VideoWriter(str(output_path), fourcc, fps, (out_w, out_h))
-    if not writer.isOpened():
+    writer = _open_video_writer(output_path, fps, (out_w, out_h))
+    if writer is None:
         cap.release()
-        raise ValueError("annotated 영상 Writer를 열 수 없습니다 (코덱 mp4v)")
+        raise ValueError(
+            "annotated 영상 Writer를 열 수 없습니다 (H.264/avc1/mp4v 코덱)"
+        )
 
     for frame_data in frames_data:
+        src_idx = frame_data.get("source_frame_index")
+        if src_idx is not None:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(src_idx))
         ret, frame = cap.read()
         if not ret:
             break
         vis = _draw_landmarks_overlay(frame, frame_data)
-        panel = _build_side_panel(frame_data, out_h)
+        panel = _build_side_panel(frame_data, h)
         combined = np.hstack([vis, panel])
+        combined = _resize_frame(combined, out_w, out_h)
         writer.write(combined)
 
     cap.release()
