@@ -18,10 +18,15 @@ from .preprocess import (
     preprocess_window,
     resolve_offset_sec,
 )
+from .dual_analysis import AnalysisMode, analyze_dual_creativity
+from .motion_creativity import DEFAULT_MOTION_SCORING, DEFAULT_MOTION_SEGMENTATION
 from .segment_detect import (
     aggregate_segment_creativity_scores,
+    build_creativity_timing_summary,
     count_frames_in_time_window,
     detect_ref_segments,
+    enrich_frame_diffs_with_times,
+    extract_peak_divergence_windows,
     map_segment_to_user_time,
 )
 
@@ -29,6 +34,7 @@ AlignmentMethod = Literal["index", "time", "dtw"]
 
 _OUTPUT_ROOT = Path(__file__).resolve().parent / "output"
 _DEFAULT_SAVE_DIR = _OUTPUT_ROOT / "extractions"
+_VIDEO_SUFFIXES = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
 
 
 def ensure_output_dirs() -> None:
@@ -38,6 +44,153 @@ def ensure_output_dirs() -> None:
 
 def _is_image_extraction(extraction: dict[str, Any]) -> bool:
     return extraction.get("media_type") == "image" or len(extraction.get("frames") or []) <= 1
+
+
+def _path_is_video_file(path: str | None) -> bool:
+    if not path:
+        return False
+    try:
+        p = Path(path)
+        return p.is_file() and p.suffix.lower() in _VIDEO_SUFFIXES
+    except OSError:
+        return False
+
+
+def resolve_creativity_video_sources(
+    user_raw: dict[str, Any],
+    ref_raw: dict[str, Any],
+    *,
+    user_source: str,
+    ref_source: str,
+    user_video_path: str | None = None,
+) -> tuple[str, str, bool]:
+    """
+    두 영상 비교용 media 경로. beat_grid·music_align에 쓸 수 있는 mp4가 있으면 True.
+    """
+    paths: list[str] = []
+    for candidate in (
+        user_video_path,
+        user_raw.get("source"),
+        ref_raw.get("source"),
+        user_source,
+        ref_source,
+    ):
+        if candidate and _path_is_video_file(str(candidate)):
+            s = str(candidate)
+            if s not in paths:
+                paths.append(s)
+    if not paths:
+        return user_source, ref_source, False
+    user_p = paths[0]
+    ref_p = paths[1] if len(paths) > 1 else paths[0]
+    return user_p, ref_p, True
+
+
+def score_creativity_media_pair_from_extractions(
+    user_raw: dict[str, Any],
+    ref_raw: dict[str, Any],
+    *,
+    user_source: str,
+    ref_source: str,
+    user_video_path: str | None = None,
+    user_offset_sec: float = 0.0,
+    ref_offset_sec: float = 0.0,
+    auto_detect_start: bool = False,
+    music_align: bool = True,
+    alignment: AlignmentMethod = "dtw",
+    apply_mirror: bool = True,
+    visibility_threshold: float = 0.5,
+    baseline: bool = True,
+    pause_tuning_level: int = 0,
+    motion_segmentation: str = DEFAULT_MOTION_SEGMENTATION,
+    motion_scoring: str = DEFAULT_MOTION_SCORING,
+    analysis_mode: AnalysisMode = "motion",
+) -> dict[str, Any]:
+    """
+    저장된 user/ref 추출 JSON → 기본 창의성 채점(동작 경계 매칭).
+    통합 /video/analyze 오케스트레이터·metric API 공용.
+    """
+    user_media, ref_media, has_video = resolve_creativity_video_sources(
+        user_raw,
+        ref_raw,
+        user_source=user_source,
+        ref_source=ref_source,
+        user_video_path=user_video_path,
+    )
+    payload = analyze_extraction_pair(
+        user_raw,
+        ref_raw,
+        user_source=user_media,
+        ref_source=ref_media,
+        user_offset_sec=user_offset_sec,
+        ref_offset_sec=ref_offset_sec,
+        auto_detect_start=auto_detect_start,
+        music_align=music_align and has_video,
+        baseline=baseline,
+        alignment=alignment,
+        apply_mirror=apply_mirror,
+        visibility_threshold=visibility_threshold,
+        analysis_mode=analysis_mode,
+        pause_tuning_level=pause_tuning_level,
+        motion_segmentation=motion_segmentation,
+        motion_scoring=motion_scoring,
+    )
+    creativity = payload.get("creativity") or {}
+    motion = payload.get("motion") or creativity.get("motion")
+    breakdown = dict(creativity.get("breakdown") or {})
+    breakdown["pipeline"] = payload.get("inputs", {}).get("pipeline", "motion")
+    breakdown["analysis_mode"] = payload.get("inputs", {}).get(
+        "analysis_mode", analysis_mode
+    )
+    if motion:
+        breakdown["motion_scoring_summary"] = motion.get("scoring_summary")
+    return {
+        "score": creativity.get("score", 0.0),
+        "breakdown": breakdown,
+        "motion": motion,
+        "beat_grid": payload.get("beat_grid"),
+        "music_align": payload.get("music_align"),
+        "inputs": payload.get("inputs"),
+    }
+
+
+def _resolve_video_windows(
+    user_p: Path,
+    ref_p: Path,
+    user_raw: dict[str, Any],
+    ref_raw: dict[str, Any],
+    *,
+    music_align: bool,
+    user_offset_sec: float,
+    ref_offset_sec: float,
+    auto_detect_start: bool,
+) -> tuple[float, float | None, float, float | None, dict[str, Any] | None, bool]:
+    user_offset = 0.0
+    ref_offset = 0.0
+    user_end: float | None = None
+    ref_end: float | None = None
+    music_info: dict[str, Any] | None = None
+    use_music = False
+    manual_offset = user_offset_sec != 0.0 or ref_offset_sec != 0.0
+    if music_align and not manual_offset and not auto_detect_start:
+        use_music = True
+        user_offset, user_end, ref_offset, ref_end, music_info = resolve_music_offsets(
+            str(user_p),
+            str(ref_p),
+            use_music_align=True,
+        )
+    else:
+        user_offset = resolve_offset_sec(
+            user_raw.get("frames") or [],
+            user_offset_sec,
+            auto_detect_start,
+        )
+        ref_offset = resolve_offset_sec(
+            ref_raw.get("frames") or [],
+            ref_offset_sec,
+            auto_detect_start,
+        )
+    return user_offset, user_end, ref_offset, ref_end, music_info, use_music
 
 
 def _analyze_image_pair(
@@ -167,9 +320,13 @@ def analyze_extraction_pair(
     idle_min_frames: int = 3,
     motion_velocity_threshold: float | None = None,
     min_blend_weight: float = 0.15,
+    analysis_mode: AnalysisMode = "motion",
     extra_inputs: dict[str, Any] | None = None,
+    pause_tuning_level: int = 0,
+    motion_segmentation: str = DEFAULT_MOTION_SEGMENTATION,
+    motion_scoring: str = DEFAULT_MOTION_SCORING,
 ) -> dict[str, Any]:
-    """이미 추출된 user/ref JSON — 영상은 동작 단위, 이미지는 1프레임."""
+    """이미 추출된 user/ref JSON — 영상: motion(기본) 또는 legacy."""
     user_p = Path(user_source)
     ref_p = Path(ref_source)
 
@@ -187,6 +344,31 @@ def analyze_extraction_pair(
             save_extractions=save_extractions,
             save_dir=save_dir,
             extra_inputs=extra_inputs,
+        )
+
+    if analysis_mode != "legacy":
+        return _analyze_dual_mode(
+            user_p,
+            ref_p,
+            user_raw,
+            ref_raw,
+            music_align=music_align,
+            user_offset_sec=user_offset_sec,
+            ref_offset_sec=ref_offset_sec,
+            auto_detect_start=auto_detect_start,
+            baseline=baseline,
+            with_accuracy=with_accuracy,
+            with_llm_adjustment=with_llm_adjustment,
+            alignment=alignment,
+            apply_mirror=apply_mirror,
+            visibility_threshold=visibility_threshold,
+            save_extractions=save_extractions,
+            save_dir=save_dir,
+            analysis_mode=analysis_mode,
+            extra_inputs=extra_inputs,
+            pause_tuning_level=pause_tuning_level,
+            motion_segmentation=motion_segmentation,
+            motion_scoring=motion_scoring,
         )
 
     return _analyze_segment_mode(
@@ -234,10 +416,14 @@ def analyze_media_pair(
     idle_min_frames: int = 3,
     motion_velocity_threshold: float | None = None,
     min_blend_weight: float = 0.15,
+    analysis_mode: AnalysisMode = "motion",
+    pause_tuning_level: int = 0,
+    motion_segmentation: str = DEFAULT_MOTION_SEGMENTATION,
+    motion_scoring: str = DEFAULT_MOTION_SCORING,
 ) -> dict[str, Any]:
     """
     사용자·레퍼런스 미디어 쌍 → 창의성 점수.
-    영상: 동작 단위(motion_idle) n개 비교. 이미지: 1프레임.
+    영상: analysis_mode motion(기본)=동작 경계 채점, legacy=구 motion_idle n구간.
 
     Raises:
         ValueError: 입력/미디어/비교 불가
@@ -273,15 +459,15 @@ def analyze_media_pair(
             save_dir=save_dir,
         )
 
-    return _analyze_segment_mode(
-        user_p,
-        ref_p,
+    return analyze_extraction_pair(
         user_raw,
         ref_raw,
-        music_align=music_align,
+        user_source=str(user_p),
+        ref_source=str(ref_p),
         user_offset_sec=user_offset_sec,
         ref_offset_sec=ref_offset_sec,
         auto_detect_start=auto_detect_start,
+        music_align=music_align,
         baseline=baseline,
         with_accuracy=with_accuracy,
         with_llm_adjustment=with_llm_adjustment,
@@ -294,7 +480,126 @@ def analyze_media_pair(
         idle_min_frames=idle_min_frames,
         motion_velocity_threshold=motion_velocity_threshold,
         min_blend_weight=min_blend_weight,
+        analysis_mode=analysis_mode,
+        pause_tuning_level=pause_tuning_level,
+        motion_segmentation=motion_segmentation,
+        motion_scoring=motion_scoring,
     )
+
+
+def _analyze_dual_mode(
+    user_p: Path,
+    ref_p: Path,
+    user_raw: dict[str, Any],
+    ref_raw: dict[str, Any],
+    *,
+    music_align: bool,
+    user_offset_sec: float,
+    ref_offset_sec: float,
+    auto_detect_start: bool,
+    baseline: bool,
+    with_accuracy: bool,
+    with_llm_adjustment: bool,
+    alignment: AlignmentMethod,
+    apply_mirror: bool,
+    visibility_threshold: float,
+    save_extractions: bool,
+    save_dir: Path | None,
+    analysis_mode: AnalysisMode,
+    extra_inputs: dict[str, Any] | None = None,
+    pause_tuning_level: int = 0,
+    motion_segmentation: str = DEFAULT_MOTION_SEGMENTATION,
+    motion_scoring: str = DEFAULT_MOTION_SCORING,
+) -> dict[str, Any]:
+    user_offset, user_end, ref_offset, ref_end, music_info, use_music = _resolve_video_windows(
+        user_p,
+        ref_p,
+        user_raw,
+        ref_raw,
+        music_align=music_align,
+        user_offset_sec=user_offset_sec,
+        ref_offset_sec=ref_offset_sec,
+        auto_detect_start=auto_detect_start,
+    )
+
+    audio_path = str(ref_p)
+    if user_p.resolve() == ref_p.resolve():
+        audio_path = str(user_p)
+
+    stream_labels = None
+    if extra_inputs and extra_inputs.get("mode") == "split_screen":
+        split = extra_inputs
+        up = split.get("user_panel", "left")
+        stream_labels = (
+            ("left", "right") if up == "left" else ("right", "left")
+        )
+
+    dual = analyze_dual_creativity(
+        user_raw,
+        ref_raw,
+        audio_video_path=audio_path,
+        user_offset_sec=user_offset,
+        ref_offset_sec=ref_offset,
+        user_end_sec=user_end,
+        ref_end_sec=ref_end,
+        alignment=alignment,
+        apply_mirror=apply_mirror,
+        visibility_threshold=visibility_threshold,
+        baseline=baseline,
+        analysis_mode=analysis_mode,
+        stream_labels=stream_labels,
+        pause_tuning_level=pause_tuning_level,
+        motion_segmentation=motion_segmentation,
+        motion_scoring=motion_scoring,
+    )
+
+    creativity_result: dict[str, Any] = {
+        "score": dual.get("score", 0.0),
+        "breakdown": dual.get("breakdown") or {},
+        "rhythm": dual.get("rhythm"),
+        "motion": dual.get("motion"),
+    }
+
+    inputs: dict[str, Any] = {
+        "user": str(user_p),
+        "reference": str(ref_p),
+        "media_type": "video",
+        "analysis_mode": analysis_mode,
+        "pipeline": "motion",
+        "motion_segmentation": motion_segmentation,
+        "motion_scoring": motion_scoring,
+        "user_offset_sec": user_offset,
+        "user_end_sec": user_end,
+        "ref_offset_sec": ref_offset,
+        "ref_end_sec": ref_end,
+        "music_align": use_music,
+        "alignment": alignment,
+        "apply_mirror": apply_mirror,
+        "visibility_threshold": visibility_threshold,
+        "baseline": baseline,
+        "pause_tuning_level": pause_tuning_level,
+    }
+    if extra_inputs:
+        inputs.update(extra_inputs)
+
+    payload: dict[str, Any] = {
+        "inputs": inputs,
+        "beat_grid": dual.get("beat_grid"),
+        "creativity": creativity_result,
+        "rhythm": dual.get("rhythm"),
+        "motion": dual.get("motion"),
+    }
+    if music_info is not None:
+        payload["music_align"] = music_info
+
+    if save_extractions:
+        ensure_output_dirs()
+        out_dir = save_dir or _DEFAULT_SAVE_DIR
+        out_dir.mkdir(parents=True, exist_ok=True)
+        save_extraction(user_raw, out_dir / "user.creativity.full.json")
+        save_extraction(ref_raw, out_dir / "reference.creativity.full.json")
+
+    return payload
 
 
 def _analyze_segment_mode(
@@ -321,32 +626,16 @@ def _analyze_segment_mode(
     min_blend_weight: float = 0.15,
     extra_inputs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    user_offset = 0.0
-    ref_offset = 0.0
-    user_end: float | None = None
-    ref_end: float | None = None
-    music_info: dict[str, Any] | None = None
-    use_music = False
-
-    manual_offset = user_offset_sec != 0.0 or ref_offset_sec != 0.0
-    if music_align and not manual_offset and not auto_detect_start:
-        use_music = True
-        user_offset, user_end, ref_offset, ref_end, music_info = resolve_music_offsets(
-            str(user_p),
-            str(ref_p),
-            use_music_align=True,
-        )
-    else:
-        user_offset = resolve_offset_sec(
-            user_raw.get("frames") or [],
-            user_offset_sec,
-            auto_detect_start,
-        )
-        ref_offset = resolve_offset_sec(
-            ref_raw.get("frames") or [],
-            ref_offset_sec,
-            auto_detect_start,
-        )
+    user_offset, user_end, ref_offset, ref_end, music_info, use_music = _resolve_video_windows(
+        user_p,
+        ref_p,
+        user_raw,
+        ref_raw,
+        music_align=music_align,
+        user_offset_sec=user_offset_sec,
+        ref_offset_sec=ref_offset_sec,
+        auto_detect_start=auto_detect_start,
+    )
 
     ref_frames = ref_raw.get("frames") or []
     user_frames = user_raw.get("frames") or []
@@ -469,12 +758,22 @@ def _analyze_segment_mode(
             baseline_pairs=baseline_pairs,
             baseline_dtw_mean_cost=baseline_dtw,
         )
+        seg_frames_u = user_ext.get("frames") or []
+        seg_frames_r = ref_ext.get("frames") or []
+        frame_diffs = enrich_frame_diffs_with_times(
+            creativity_seg.get("frame_diffs") or [],
+            seg_frames_u,
+            seg_frames_r,
+        )
+        creativity_seg["frame_diffs"] = frame_diffs
+        peak_windows = extract_peak_divergence_windows(frame_diffs)
         row: dict[str, Any] = {
             "index": seg["index"],
             "ref_window_sec": [round(r0, 4), round(r1, 4)],
             "user_window_sec": [round(u0, 4), round(u1, 4)],
             "frame_count": n_k,
             "duration_sec": seg["duration_sec"],
+            "peak_divergence_windows": peak_windows,
             "alignment": align_meta,
             "creativity": creativity_seg,
             "preprocess": {
@@ -499,6 +798,15 @@ def _analyze_segment_mode(
         scored_rows,
         min_blend_weight=min_blend_weight,
     )
+    bd = creativity_result.get("breakdown") or {}
+    timing_summary = build_creativity_timing_summary(
+        segment_rows,
+        analysis_window_reference=(ref_offset, ref_win_end),
+        analysis_window_user=(user_offset, user_win_end),
+        weighted_mean_score=bd.get("weighted_mean_score"),
+    )
+    bd["timing"] = timing_summary
+    creativity_result["breakdown"] = bd
     if with_llm_adjustment:
         from .llm_creativity import apply_llm_hybrid_to_creativity
 
@@ -534,6 +842,7 @@ def _analyze_segment_mode(
         "inputs": inputs_seg,
         "segment_detection": seg_detect,
         "segments": segment_rows,
+        "timing": timing_summary,
         "creativity": creativity_result,
     }
     if music_info is not None:

@@ -31,9 +31,13 @@ def analyze_split_screen_video(
     idle_min_frames: int = 3,
     motion_velocity_threshold: float | None = None,
     render_output: str | Path | None = None,
-    left_label: str = "기준",
-    right_label: str = "창의성",
+    left_label: str = "Reference",
+    right_label: str = "Compare",
     save_extractions: bool = False,
+    analysis_mode: str = "motion",
+    pause_tuning_level: int = 0,
+    motion_segmentation: str = "activation",
+    motion_scoring: str = "boundary",
 ) -> dict[str, Any]:
     """
     한 영상(좌/우 분할)에서 두 포즈 시퀀스를 추출해 기존 창의성 로직으로 비교.
@@ -67,6 +71,10 @@ def analyze_split_screen_video(
         idle_min_frames=idle_min_frames,
         motion_velocity_threshold=motion_velocity_threshold,
         save_extractions=save_extractions,
+        analysis_mode=analysis_mode,  # type: ignore[arg-type]
+        pause_tuning_level=pause_tuning_level,
+        motion_segmentation=motion_segmentation,
+        motion_scoring=motion_scoring,
         extra_inputs={
             "mode": "split_screen",
             "split_ratio": split_ratio,

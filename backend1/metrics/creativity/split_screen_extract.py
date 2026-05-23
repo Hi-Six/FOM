@@ -7,7 +7,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Literal
 
-from .extract import _frame_from_landmarks_row
+from .extract import CENTER_CROP_RATIO, _frame_from_landmarks_row
 from .pose_backend import LANDMARK_NAMES, PoseLandmarkerSession
 
 SplitAxis = Literal["vertical"]
@@ -76,13 +76,13 @@ def extract_split_screen_video(
                 left_crop,
                 cols,
                 timestamp_ms=ts_ms,
-                prefer_center_crop=False,
+                prefer_center_crop=True,
             )
             right_row = session.process_bgr(
                 right_crop,
                 cols,
                 timestamp_ms=ts_ms,
-                prefer_center_crop=False,
+                prefer_center_crop=True,
             )
             left_rows.append(left_row if left_row is not None else list(nan_row))
             right_rows.append(right_row if right_row is not None else list(nan_row))
@@ -124,6 +124,7 @@ def extract_split_screen_video(
             "total_frames_reported": total_in_file,
             "split_screen": True,
             "panel": panel,
+            "center_crop_ratio": CENTER_CROP_RATIO,
             "frames": frames_out,
         }
 
@@ -144,6 +145,8 @@ def extract_split_screen_video(
         "left_role": left_role,
         "user_panel": user_raw.get("panel"),
         "reference_panel": ref_raw.get("panel"),
+        "center_crop_per_panel": True,
+        "center_crop_ratio": CENTER_CROP_RATIO,
         "fps": fps,
         "decoded_frames": decoded,
     }

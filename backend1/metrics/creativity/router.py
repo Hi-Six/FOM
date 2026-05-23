@@ -35,9 +35,10 @@ def creativity_ready() -> dict:
         "ready": True,
         "metric": "creativity",
         "pipeline": (
-            "music_align → motion_idle segments (default n=3) → "
-            "per-unit full frames → align → score_creativity [→ llm hybrid]"
+            "music_align → activation 구간 경계 → ref/user 구분점 매칭 "
+            "+ 사이 구분 가산 (기본 motion/boundary) [→ llm hybrid]"
         ),
+        "default_scoring": "motion_boundary",
         "analyze_endpoint": "POST /creativity/analyze",
         "split_screen_endpoint": "POST /creativity/analyze-split-screen",
     }
@@ -45,12 +46,13 @@ def creativity_ready() -> dict:
 
 @router.post(
     "/analyze",
-    summary="사용자·레퍼런스 영상/이미지 쌍 → 창의성 점수 (전체 파이프라인)",
+    summary="사용자·레퍼런스 영상/이미지 쌍 → 창의성 점수 (동작 경계 매칭)",
     description=(
-        "영상: 동작 단위(motion_idle, 연속 N프레임 정지=경계) 분할 후 n개(기본 3) 구간 전프레임 비교. "
-        "이미지: 1프레임. 음악 구간 정렬·DTW·baseline 기본 on. "
-        "with_llm_adjustment=true 시 수식 점수 × Ollama 보정(0.8~1.2). "
-        "6 metric 통합 POST /video/analyze 와 별도 — CLI와 동일 파이프라인입니다."
+        "기본: 두 영상 포즈 추출 → activation 구간 분할 → ref/user 구분점 매칭·"
+        "사이 구분 가산(boundary, 구분 1점·사이 2점·사이 상한=구간×20%). "
+        "음악 구간 정렬·DTW·baseline 기본 on. "
+        "legacy=구 motion_idle n구간·포즈 이탈. "
+        "with_llm_adjustment=true 시 수식 점수 × Ollama 보정(0.8~1.2)."
     ),
 )
 async def analyze_creativity(
@@ -113,7 +115,25 @@ async def analyze_creativity(
         0.15,
         ge=0.0,
         le=0.5,
-        description="최저 구간 점수 블렌드 비율 (0=가중평균만)",
+        description="최저 구간 점수 블렌드 비율 (0=가중평균만, legacy만)",
+    ),
+    analysis_mode: Literal["legacy", "rhythm", "motion", "both"] = Form(
+        "motion",
+        description="motion=동작 채점(기본), both=motion과 동일, rhythm=박자만, legacy=구 motion_idle",
+    ),
+    motion_segmentation: Literal["activation", "pause"] = Form(
+        "activation",
+        description="동작 구간 경계: activation(기본) | pause",
+    ),
+    motion_scoring: Literal["boundary", "pose"] = Form(
+        "boundary",
+        description="동작 채점: boundary(기본) | pose",
+    ),
+    pause_tuning_level: int = Form(
+        0,
+        ge=0,
+        le=5,
+        description="pause 구간 분할 시 튜닝(0~5, motion_segmentation=pause 일 때)",
     ),
 ):
     user_ext = _ext(user_video.filename)
@@ -159,11 +179,16 @@ async def analyze_creativity(
             idle_min_frames=idle_min_frames,
             motion_velocity_threshold=motion_velocity_threshold,
             min_blend_weight=min_blend_weight,
+            analysis_mode=analysis_mode,
+            motion_segmentation=motion_segmentation,
+            motion_scoring=motion_scoring,
+            pause_tuning_level=pause_tuning_level,
         )
         result["meta"] = {
             "user_filename": user_video.filename,
             "reference_filename": reference_video.filename,
             "endpoint": "POST /creativity/analyze",
+            "default_scoring": "motion_boundary",
         }
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
@@ -186,8 +211,8 @@ async def analyze_creativity(
     summary="분할 화면 단일 영상 — 좌/우 두 사람 창의성 비교 + 결과 영상",
     description=(
         "세로 분할(좌/우) 숏폼·비교 영상에서 각 패널 포즈 추출 후 "
-        "기존 창의성 파이프라인(음악 구간·샘플·DTW·baseline) 적용. "
-        "스켈레톤·이탈 수치·총점이 오버레이된 mp4를 output 경로에 생성합니다."
+        "동작 경계 매칭 창의성 채점(기본 boundary). "
+        "양끝 매칭 구간은 스켈레톤 노란색. 결과 mp4는 output 경로에 생성."
     ),
 )
 async def analyze_split_screen(
@@ -205,10 +230,14 @@ async def analyze_split_screen(
     num_motion_units: int = Form(3, ge=1, le=12),
     idle_min_frames: int = Form(3, ge=1, le=15),
     motion_velocity_threshold: float | None = Form(None),
-    left_label: str = Form("기준"),
-    right_label: str = Form("창의성"),
+    left_label: str = Form("Reference"),
+    right_label: str = Form("Compare"),
     with_accuracy: bool = Form(False),
     with_llm_adjustment: bool = Form(False),
+    analysis_mode: Literal["legacy", "rhythm", "motion", "both"] = Form("motion"),
+    motion_segmentation: Literal["activation", "pause"] = Form("activation"),
+    motion_scoring: Literal["boundary", "pose"] = Form("boundary"),
+    pause_tuning_level: int = Form(0, ge=0, le=5),
 ):
     ext = _ext(video.filename)
     if ext not in {".mp4", ".mov", ".avi", ".mkv", ".webm"}:
@@ -249,6 +278,10 @@ async def analyze_split_screen(
             render_output=out_render,
             left_label=left_label,
             right_label=right_label,
+            analysis_mode=analysis_mode,
+            motion_segmentation=motion_segmentation,
+            motion_scoring=motion_scoring,
+            pause_tuning_level=pause_tuning_level,
         )
         result["meta"] = {
             "filename": video.filename,

@@ -258,6 +258,203 @@ def map_segment_to_user_time(
     return u0, u1
 
 
+def _frame_time_lookup(frames: list[dict[str, Any]]) -> dict[int, float]:
+    out: dict[int, float] = {}
+    for i, fr in enumerate(frames):
+        idx = int(fr.get("frame_index", i))
+        out[idx] = float(fr.get("time_sec", 0.0))
+    return out
+
+
+def enrich_frame_diffs_with_times(
+    frame_diffs: list[dict[str, Any]],
+    user_frames: list[dict[str, Any]],
+    ref_frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """frame_diffs 에 user/ref 타임라인(초) 부여."""
+    user_t = _frame_time_lookup(user_frames)
+    ref_t = _frame_time_lookup(ref_frames)
+    enriched: list[dict[str, Any]] = []
+    for fd in frame_diffs:
+        copy = dict(fd)
+        uf = copy.get("user_frame")
+        rf = copy.get("ref_frame")
+        if uf is not None and int(uf) in user_t:
+            copy["user_time_sec"] = round(user_t[int(uf)], 4)
+        if rf is not None and int(rf) in ref_t:
+            copy["ref_time_sec"] = round(ref_t[int(rf)], 4)
+        enriched.append(copy)
+    return enriched
+
+
+def extract_peak_divergence_windows(
+    frame_diffs: list[dict[str, Any]],
+    *,
+    min_divergence: float = 0.22,
+    max_gap_sec: float = 0.4,
+) -> list[dict[str, Any]]:
+    """
+    프레임 이탈이 창의 band 하한(기본 0.22) 이상인 구간을 user/ref 시간으로 병합.
+    """
+    points: list[tuple[float, float, float | None]] = []
+    for fd in frame_diffs:
+        d = fd.get("divergence")
+        if d is None or float(d) < min_divergence:
+            continue
+        ut = fd.get("user_time_sec")
+        if ut is None:
+            continue
+        points.append((float(ut), float(d), fd.get("ref_time_sec")))
+    if not points:
+        return []
+
+    points.sort(key=lambda x: x[0])
+    windows: list[dict[str, Any]] = []
+    run_u0 = points[0][0]
+    run_u1 = points[0][0]
+    run_r0 = points[0][2]
+    run_r1 = points[0][2]
+    divs = [points[0][1]]
+
+    def _flush() -> None:
+        nonlocal run_u0, run_u1, run_r0, run_r1, divs
+        ref_time: dict[str, float] | None = None
+        if run_r0 is not None and run_r1 is not None:
+            ref_time = {
+                "start_sec": round(float(run_r0), 4),
+                "end_sec": round(float(run_r1), 4),
+                "duration_sec": round(float(run_r1) - float(run_r0), 4),
+            }
+        windows.append(
+            {
+                "user_time": {
+                    "start_sec": round(run_u0, 4),
+                    "end_sec": round(run_u1, 4),
+                    "duration_sec": round(run_u1 - run_u0, 4),
+                },
+                "reference_time": ref_time,
+                "mean_divergence": round(float(sum(divs) / len(divs)), 4),
+                "frame_count": len(divs),
+            }
+        )
+
+    for ut, d, rt in points[1:]:
+        if ut - run_u1 > max_gap_sec:
+            _flush()
+            run_u0 = ut
+            divs = []
+            run_r0 = rt
+        run_u1 = ut
+        if rt is not None:
+            if run_r0 is None:
+                run_r0 = rt
+            run_r1 = rt
+        divs.append(d)
+    _flush()
+    return windows
+
+
+def _window_from_pair(pair: list[float] | tuple[float, float] | None) -> dict[str, float] | None:
+    if not pair or len(pair) < 2:
+        return None
+    a, b = float(pair[0]), float(pair[1])
+    return {
+        "start_sec": round(a, 4),
+        "end_sec": round(b, 4),
+        "duration_sec": round(max(0.0, b - a), 4),
+    }
+
+
+def build_creativity_timing_summary(
+    segment_rows: list[dict[str, Any]],
+    *,
+    analysis_window_reference: tuple[float, float | None],
+    analysis_window_user: tuple[float, float | None],
+    weighted_mean_score: float | None = None,
+) -> dict[str, Any]:
+    """
+    채점에 쓰인 동작 단위 시간대 + 창의성이 높게 나온 동작 시간대.
+    """
+    scored = [
+        r
+        for r in segment_rows
+        if r.get("creativity", {}).get("score") is not None and not r.get("skipped")
+    ]
+    scores = [float(r["creativity"]["score"]) for r in scored]
+    mean_score = (
+        float(weighted_mean_score)
+        if weighted_mean_score is not None
+        else (sum(scores) / len(scores) if scores else 0.0)
+    )
+    max_score = max(scores) if scores else 0.0
+    # 구간 평균 이상 또는 최고점 구간 = "점수가 올라간" 동작
+    high_threshold = mean_score
+
+    scoring_motion_units: list[dict[str, Any]] = []
+    for r in segment_rows:
+        unit: dict[str, Any] = {
+            "index": r.get("index"),
+            "used_in_final_score": bool(
+                r.get("creativity", {}).get("score") is not None and not r.get("skipped")
+            ),
+            "reference_time": _window_from_pair(r.get("ref_window_sec")),
+            "user_time": _window_from_pair(r.get("user_window_sec")),
+            "duration_sec": r.get("duration_sec"),
+            "frame_count": r.get("frame_count"),
+        }
+        if r.get("skipped"):
+            unit["skipped"] = True
+            unit["skip_reason"] = r.get("reason")
+        cr = r.get("creativity") or {}
+        if cr.get("score") is not None:
+            unit["creativity_score"] = cr["score"]
+        if r.get("peak_divergence_windows"):
+            unit["peak_divergence_windows"] = r["peak_divergence_windows"]
+        scoring_motion_units.append(unit)
+
+    high_creativity_motions: list[dict[str, Any]] = []
+    for r in scored:
+        sc = float(r["creativity"]["score"])
+        if sc < high_threshold and sc < max_score:
+            continue
+        entry: dict[str, Any] = {
+            "segment_index": r.get("index"),
+            "creativity_score": sc,
+            "reference_time": _window_from_pair(r.get("ref_window_sec")),
+            "user_time": _window_from_pair(r.get("user_window_sec")),
+            "reason": "segment_score_at_or_above_mean"
+            if sc >= high_threshold
+            else "top_segment",
+        }
+        peaks = r.get("peak_divergence_windows") or []
+        if peaks:
+            entry["peak_divergence_windows"] = peaks
+        high_creativity_motions.append(entry)
+    high_creativity_motions.sort(
+        key=lambda x: float(x.get("creativity_score") or 0),
+        reverse=True,
+    )
+
+    ref_end = analysis_window_reference[1]
+    user_end = analysis_window_user[1]
+    return {
+        "analysis_window": {
+            "reference": {
+                "start_sec": round(float(analysis_window_reference[0]), 4),
+                "end_sec": round(float(ref_end), 4) if ref_end is not None else None,
+            },
+            "user": {
+                "start_sec": round(float(analysis_window_user[0]), 4),
+                "end_sec": round(float(user_end), 4) if user_end is not None else None,
+            },
+        },
+        "scoring_motion_units": scoring_motion_units,
+        "high_creativity_motions": high_creativity_motions,
+        "high_creativity_threshold_score": round(mean_score, 2),
+        "max_segment_score": round(max_score, 2),
+    }
+
+
 def aggregate_segment_creativity_scores(
     segment_results: list[dict[str, Any]],
     *,
@@ -292,6 +489,8 @@ def aggregate_segment_creativity_scores(
                 "score": s["creativity"]["score"],
                 "duration_sec": s.get("duration_sec"),
                 "frame_count": s.get("frame_count"),
+                "reference_time": _window_from_pair(s.get("ref_window_sec")),
+                "user_time": _window_from_pair(s.get("user_window_sec")),
                 "mean_divergence": (s.get("creativity", {}).get("breakdown") or {}).get(
                     "mean_divergence"
                 ),
