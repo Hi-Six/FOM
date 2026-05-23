@@ -5,7 +5,10 @@ from .align import align_by_dtw, align_by_index, align_by_time, align_extraction
 from .creativity import score_creativity
 from .extract import extract_from_image, extract_from_media, extract_from_video, save_extraction
 from .music_align import align_music_segment, resolve_music_offsets
-from .service import analyze_media_pair
+from .llm_creativity import apply_llm_hybrid_to_creativity
+from .segment_detect import detect_motion_unit_segments, detect_ref_segments
+from .service import analyze_extraction_pair, analyze_media_pair
+from .split_screen_service import analyze_split_screen_video
 from .preprocess import (
     detect_dance_start,
     preprocess_extraction,
@@ -29,4 +32,9 @@ __all__ = [
     "align_music_segment",
     "resolve_music_offsets",
     "analyze_media_pair",
+    "analyze_extraction_pair",
+    "analyze_split_screen_video",
+    "apply_llm_hybrid_to_creativity",
+    "detect_ref_segments",
+    "detect_motion_unit_segments",
 ]
