@@ -7,8 +7,8 @@
 
 ### 반드시 맞출 것
 
-- [x] **동일 BGM 구간 샘플**: `--music-align`(기본 on) — 크로마로 `[시작, 끝]` 검출 후 그 안에서만 균등 샘플
-- [x] **샘플 밀도**: `--num-frames` 기본 **50** (파라미터로 변경 가능)
+- [x] **동일 BGM 구간**: `--music-align`(기본 on) — 크로마로 `[시작, 끝]` 검출
+- [x] **동작 단위 비교**: 연속 **3프레임** 이상 정지=경계 → 상위 **n=3** 동작 구간, 구간 내 **전 프레임** 비교
 - [x] **메인 댄서**: 화면 중앙 72% crop 후 MediaPipe
 - [x] **신체 스케일**: Mid-Hip 원점 + torso 길이 정규화
 - [x] **비교 특징**: `normalized_landmarks`, `joint_angles`, `bone_vectors`
@@ -44,17 +44,19 @@ $env:PYTHONPATH = (Get-Location).Path
 ```cmd
 cd /d C:\ai-x\FOM\backend1
 set PYTHONPATH=C:\ai-x\FOM\backend1
-python -m metrics.creativity --user user.mp4 --reference ref.mp4 --num-frames 50 --alignment dtw
+python -m metrics.creativity.cli --user user.mp4 --reference ref.mp4 --num-motion-units 3 --alignment dtw
 ```
 
 ### 옵션 요약
 
 | 옵션 | 기본 | 설명 |
 |------|------|------|
-| `--num-frames` | 50 | 음악 구간 내 균등 샘플 수 |
+| `--num-motion-units` | 3 | 비교할 동작 단위 수 |
+| `--idle-min-frames` | 3 | 연속 정지 프레임(동작 경계) |
 | `--music-align` / `--no-music-align` | on | 동일 BGM 크로마 구간 정렬 |
 | `--baseline` / `--no-baseline` | on | ref vs ref 기준선 |
 | `--with-accuracy` | off | 동일 파이프라인 정확도(참고) |
+| `--with-llm` | off | 수식 점수 × LLM 보정(0.8~1.2, Ollama) |
 | `--alignment` | dtw | index / time / dtw |
 
 ## 파이프라인
@@ -65,18 +67,27 @@ python -m metrics.creativity --user user.mp4 --reference ref.mp4 --num-frames 50
   → preprocess: 구간 내 균등 N프레임(기본 50), 미러, visibility
   → align (index|time|dtw) + dtw_mean_cost
   → align(ref, ref) 기준선
-  → score_creativity(3단계) + (선택) score_accuracy
+  → score_creativity(3단계) → (선택) LLM 하이브리드 보정
+  → (선택) score_accuracy
 ```
+
+### LLM 하이브리드 (방안 1)
+
+- `최종 점수 = 수식 점수 × creativity_adjustment` (0.80~1.20, 기본 1.0)
+- Ollama `qwen2.5:7b-instruct-q4_K_M` @ `http://localhost:11434`
+- CLI: `--with-llm` / API: `with_llm_adjustment=true`
+- 실패 시 계수 1.0, `breakdown.llm_error` 기록
 
 ## 출력 JSON
 
-`inputs`, `music_align`, `preprocess`, `alignment`, `creativity` (score, breakdown, frame_diffs), (선택) `accuracy`
+`inputs`, `music_align`, `preprocess`, `alignment`, `creativity` (score, breakdown, frame_diffs, `llm_hybrid`), (선택) `accuracy`
 
 ### breakdown 주요 필드 (P4)
 
 - `mean_divergence`, `divergence_band_factor`, `dtw_penalty_factor`, `effective_band_factor`
 - `combined_raw`, `baseline_combined_raw`, `combined_after_baseline`, `baseline_subtracted`
 - `dtw_mean_cost`, `divergence_thresholds`, `dtw_thresholds`
+- `formula_score`, `llm_adjustment`, `llm_rationale`, `llm_flags`, `score_after_llm`
 
 ## HTTP API (Swagger 테스트)
 
@@ -92,9 +103,9 @@ cd C:\ai-x\FOM\backend1
 uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-Form 기본값: `num_frames=50`, `music_align=true`, `baseline=true`, `alignment=dtw`
+Form 기본값(영상): `num_motion_units=3`, `idle_min_frames=3`, `music_align=true`, `baseline=true`, `alignment=dtw`
 
 ## 통합 API (별도)
 
 `POST /video/analyze` 에서 creativity 채점은 오케스트레이터(ROM 정렬) 경로입니다.  
-**음악 구간·50프레임·3단계 전체** 는 `POST /creativity/analyze` 또는 CLI를 사용하세요.
+**음악 구간·동작 단위(n=3)·3단계 전체** 는 `POST /creativity/analyze` 또는 CLI를 사용하세요.
