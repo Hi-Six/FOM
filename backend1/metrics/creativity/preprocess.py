@@ -185,6 +185,71 @@ def filter_frames_by_visibility(
     return [f for f in frames if frame_visibility_ok(f, threshold)]
 
 
+def prepare_mirrored_frames(
+    extraction: dict[str, Any],
+    *,
+    apply_mirror: bool = True,
+) -> tuple[list[dict[str, Any]], bool]:
+    """전체 시퀀스에 미러 보정 1회 적용 (segment 루프에서 재사용)."""
+    all_frames: list[dict[str, Any]] = list(extraction.get("frames") or [])
+    if apply_mirror and all_frames and detect_mirror(all_frames):
+        return apply_mirror_to_frames(all_frames), True
+    return all_frames, False
+
+
+def preprocess_window(
+    extraction: dict[str, Any],
+    start_sec: float,
+    end_sec: float | None,
+    num_frames: int,
+    *,
+    apply_mirror: bool = True,
+    visibility_threshold: float = DEFAULT_VISIBILITY_THRESHOLD,
+    mirrored_frames: list[dict[str, Any]] | None = None,
+    mirror_applied: bool = False,
+) -> dict[str, Any]:
+    """[start_sec, end_sec] 구간만 균등 샘플·visibility (미러는 mirrored_frames 재사용)."""
+    if mirrored_frames is not None:
+        all_frames = mirrored_frames
+        m_applied = mirror_applied
+    else:
+        all_frames, m_applied = prepare_mirrored_frames(extraction, apply_mirror=apply_mirror)
+
+    pool = []
+    for f in all_frames:
+        t = float(f.get("time_sec", 0.0))
+        if t < start_sec:
+            continue
+        if end_sec is not None and t > end_sec:
+            continue
+        pool.append(f)
+    sampled = sample_frames_uniform(pool, num_frames, offset_sec=0.0, end_sec=None)
+    visible = filter_frames_by_visibility(sampled, visibility_threshold)
+
+    center_scores = [
+        pose_center_score(f.get("landmarks") or f.get("normalized_landmarks") or {})
+        for f in visible
+    ]
+    avg_center = sum(center_scores) / len(center_scores) if center_scores else 0.0
+
+    out = dict(extraction)
+    out["frames"] = visible
+    out["preprocess"] = {
+        "offset_sec": start_sec,
+        "end_sec": end_sec,
+        "window_start_sec": start_sec,
+        "window_end_sec": end_sec,
+        "num_frames_requested": num_frames,
+        "frames_in_window": len(pool),
+        "frames_after_sample": len(sampled),
+        "frames_after_visibility": len(visible),
+        "mirror_applied": m_applied,
+        "avg_main_dancer_center_score": round(avg_center, 4),
+        "visibility_threshold": visibility_threshold,
+    }
+    return out
+
+
 def preprocess_extraction(
     extraction: dict[str, Any],
     num_frames: int,
@@ -195,36 +260,18 @@ def preprocess_extraction(
     visibility_threshold: float = DEFAULT_VISIBILITY_THRESHOLD,
 ) -> dict[str, Any]:
     """전체 프레임 시퀀스에서 [offset, end] 구간 균등 샘플·미러·visibility 적용."""
-    all_frames: list[dict[str, Any]] = list(extraction.get("frames") or [])
+    all_frames, mirror_applied = prepare_mirrored_frames(extraction, apply_mirror=apply_mirror)
     if not all_frames:
         extraction["frames"] = []
         return extraction
 
-    mirror_applied = False
-    if apply_mirror and detect_mirror(all_frames):
-        all_frames = apply_mirror_to_frames(all_frames)
-        mirror_applied = True
-
-    sampled = sample_frames_uniform(all_frames, num_frames, offset_sec, end_sec)
-    visible = filter_frames_by_visibility(sampled, visibility_threshold)
-
-    center_scores = [
-        pose_center_score(f.get("landmarks") or f.get("normalized_landmarks") or {})
-        for f in visible
-    ]
-    avg_center = sum(center_scores) / len(center_scores) if center_scores else 0.0
-
-    extraction = dict(extraction)
-    extraction["frames"] = visible
-    extraction["preprocess"] = {
-        "offset_sec": offset_sec,
-        "end_sec": end_sec,
-        "num_frames_requested": num_frames,
-        "frames_total": len(all_frames),
-        "frames_after_sample": len(sampled),
-        "frames_after_visibility": len(visible),
-        "mirror_applied": mirror_applied,
-        "avg_main_dancer_center_score": round(avg_center, 4),
-        "visibility_threshold": visibility_threshold,
-    }
-    return extraction
+    return preprocess_window(
+        extraction,
+        offset_sec,
+        end_sec,
+        num_frames,
+        apply_mirror=apply_mirror,
+        visibility_threshold=visibility_threshold,
+        mirrored_frames=all_frames,
+        mirror_applied=mirror_applied,
+    )
