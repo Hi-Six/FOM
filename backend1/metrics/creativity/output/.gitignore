@@ -1,4 +1,6 @@
-# CLI 분석 결과·추출 JSON (로컬 테스트용, Git 제외)
+# CLI·API 분석 결과 (로컬 전용, Git 제외)
+# - creativity_score_*.json, split_result.mp4, split_creativity_*.mp4
+# - user/reference.creativity.json, *.creativity.json
 *
 !.gitignore
 !.gitkeep
