@@ -269,15 +269,15 @@ class VideoAnalyzeResult {
 
 
 
-  /// 전문가: asset(즉시) → 오버레이(대용량 네트워크).
+  /// 전문가: 오버레이 MP4 우선 → asset·원본 fallback.
   List<String> get expertPlaybackUrls {
     final out = <String>[];
-    if (expertVideoDisplayUrl.isNotEmpty) {
-      out.add(expertVideoDisplayUrl);
-    }
     if (expertAnnotatedVideoUrl != null &&
         expertAnnotatedVideoUrl!.isNotEmpty) {
       out.add(expertAnnotatedVideoUrl!);
+    }
+    if (expertVideoDisplayUrl.isNotEmpty) {
+      out.add(expertVideoDisplayUrl);
     }
     return out;
   }

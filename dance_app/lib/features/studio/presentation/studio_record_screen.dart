@@ -1,10 +1,16 @@
+import 'dart:async';
+
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:video_player/video_player.dart';
 
+import '../../../core/config/api_config.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../home/data/home_repository.dart';
+import '../../../shared/video/synced_video_playback.dart';
 import '../../../shared/video/video_source.dart';
 import '../data/compare_session.dart';
 import '../data/studio_providers.dart';
@@ -21,11 +27,15 @@ class StudioRecordScreen extends ConsumerStatefulWidget {
 class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
   CameraController? _camera;
   VideoPlayerController? _reference;
+  /// Debug·에뮬: 카메라 대신 서버 `video_data/` 사용자 MP4 미리보기.
+  VideoPlayerController? _userSubstitute;
+  bool _useDevServerUserVideo = false;
   _RecordPhase _phase = _RecordPhase.initializing;
   String? _errorMessage;
   bool _isRecording = false;
   int _countdown = 0;
   bool _stopRequested = false;
+  Timer? _endWatchTimer;
 
   @override
   void initState() {
@@ -44,6 +54,33 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
     }
 
     try {
+      final refController = videoControllerFromPath(challenge.videoUrl);
+      _useDevServerUserVideo = ApiConfig.useDevServerUserVideo &&
+          challenge.serverVideoFilename.isNotEmpty;
+
+      if (_useDevServerUserVideo) {
+        await refController.initialize();
+        await prepareMutedVideo(refController, loop: false);
+
+        final userController = await _initDevUserPreview(challenge);
+
+        if (!mounted) {
+          refController.dispose();
+          userController?.dispose();
+          return;
+        }
+
+        setState(() {
+          _reference = refController;
+          _userSubstitute = userController;
+          _phase = _RecordPhase.ready;
+        });
+        if (kDebugMode) {
+          debugPrint('[REC Setup] ready - ref.isPlaying=${refController.value.isPlaying}, user.isPlaying=${userController?.value.isPlaying}');
+        }
+        return;
+      }
+
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
         throw StateError('사용 가능한 카메라가 없습니다.');
@@ -56,19 +93,16 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
 
       final cameraController = CameraController(
         camera,
-        ResolutionPreset.high,
+        ResolutionPreset.low,
         enableAudio: false,
       );
-      final refController = videoControllerFromPath(challenge.videoUrl);
 
       await Future.wait([
         cameraController.initialize(),
         refController.initialize(),
       ]);
 
-      await refController.setLooping(false);
-      await refController.setVolume(1.0);
-      await refController.pause();
+      await prepareMutedVideo(refController, loop: false);
 
       if (!mounted) {
         await cameraController.dispose();
@@ -91,10 +125,35 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
     }
   }
 
-  Future<void> _beginCountdown() async {
-    if (_phase != _RecordPhase.ready || _camera == null || _reference == null) {
-      return;
+  Future<VideoPlayerController?> _initDevUserPreview(DanceVideo challenge) async {
+    final slash = challenge.videoUrl.lastIndexOf('/');
+    final dir = slash >= 0 ? challenge.videoUrl.substring(0, slash + 1) : '';
+    final candidates = <String>[
+      if (challenge.userPreviewAsset.isNotEmpty) challenge.userPreviewAsset,
+      if (dir.isNotEmpty) '${dir}card${challenge.id}_user.mp4',
+      if (challenge.serverVideoFilename.isNotEmpty)
+        ApiConfig.videoDataUrl(challenge.serverVideoFilename),
+    ];
+
+    for (final path in candidates) {
+      VideoPlayerController? controller;
+      try {
+        controller = videoControllerFromPath(path);
+        await controller.initialize();
+        await prepareMutedVideo(controller, loop: false);
+        await controller.seekTo(Duration.zero);
+        return controller;
+      } catch (e) {
+        debugPrint('user preview init 실패 ($path): $e');
+        controller?.dispose();
+      }
     }
+    return null;
+  }
+
+  Future<void> _beginCountdown() async {
+    if (_phase != _RecordPhase.ready || _reference == null) return;
+    if (!_useDevServerUserVideo && _camera == null) return;
 
     setState(() {
       _phase = _RecordPhase.countdown;
@@ -114,38 +173,79 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
   Future<void> _startSyncedCapture() async {
     final camera = _camera;
     final reference = _reference;
-    if (camera == null || reference == null || !camera.value.isInitialized) {
+    final userSubstitute = _userSubstitute;
+    if (reference == null || !reference.value.isInitialized) return;
+
+    if (kDebugMode) {
+      debugPrint('[REC Capture 시작] ref.isPlaying=${reference.value.isPlaying}, user.isPlaying=${userSubstitute?.value.isPlaying}');
+    }
+
+    if (_useDevServerUserVideo) {
+      // 사용자 VideoPlayer는 ready 단계에서 미리 마운트(2번 화면과 동일). 재생만 REC 시 시작.
+    } else if (camera == null || !camera.value.isInitialized) {
       return;
     }
+
+    _stopEndWatch();
+    await reference.pause();
+    await reference.seekTo(Duration.zero);
+    await userSubstitute?.pause();
+    await userSubstitute?.seekTo(Duration.zero);
 
     setState(() {
       _phase = _RecordPhase.recording;
       _isRecording = true;
       _stopRequested = false;
     });
+    await Future<void>.delayed(Duration.zero);
 
-    reference.removeListener(_onReferenceProgress);
-    await reference.pause();
-    await reference.seekTo(Duration.zero);
-    reference.addListener(_onReferenceProgress);
+    _startEndWatch();
 
-    await camera.startVideoRecording();
+    if (_useDevServerUserVideo) {
+      try {
+        await playReferenceThenUser(
+          reference: reference,
+          user: userSubstitute,
+        );
+      } catch (e) {
+        debugPrint('synced playback 실패: $e');
+      }
+      return;
+    }
+
     await reference.play();
+    await waitUntilReferencePlaying(reference);
+    final playingStartedAt = DateTime.now();
+    await waitForReferenceLead(
+      reference: reference,
+      playingStartedAt: playingStartedAt,
+    );
+    await camera!.startVideoRecording();
   }
 
-  void _onReferenceProgress() {
+  void _startEndWatch() {
+    _stopEndWatch();
+    _endWatchTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
+      _checkReferenceEnd();
+    });
+  }
+
+  void _stopEndWatch() {
+    _endWatchTimer?.cancel();
+    _endWatchTimer = null;
+  }
+
+  void _checkReferenceEnd() {
     if (!_isRecording || _stopRequested) return;
+
     final reference = _reference;
     if (reference == null || !reference.value.isInitialized) return;
 
-    final value = reference.value;
-    final duration = value.duration;
+    final duration = reference.value.duration;
     if (duration == Duration.zero) return;
 
-    final nearEnd = value.position >= duration - const Duration(milliseconds: 200);
-    final ended = !value.isPlaying && value.position > const Duration(milliseconds: 300);
-
-    if (nearEnd || ended) {
+    final position = reference.value.position;
+    if (position >= duration - const Duration(milliseconds: 50)) {
       _stopSyncedCapture();
     }
   }
@@ -156,12 +256,20 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
 
     final camera = _camera;
     final reference = _reference;
-    if (camera == null) return;
+    final userSubstitute = _userSubstitute;
 
     setState(() => _phase = _RecordPhase.finishing);
 
-    reference?.removeListener(_onReferenceProgress);
+    _stopEndWatch();
     await reference?.pause();
+    await userSubstitute?.pause();
+
+    if (_useDevServerUserVideo) {
+      await _finishDevServerCapture();
+      return;
+    }
+
+    if (camera == null) return;
 
     XFile? recorded;
     try {
@@ -203,10 +311,41 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
     context.pop();
   }
 
+  Future<void> _finishDevServerCapture() async {
+    final challenge = ref.read(selectedChallengeProvider);
+    if (!mounted) return;
+
+    if (challenge == null) {
+      setState(() {
+        _phase = _RecordPhase.error;
+        _errorMessage = '챌린지 정보가 없습니다.';
+        _isRecording = false;
+      });
+      return;
+    }
+
+    final previewPath = challenge.userPreviewAsset.isNotEmpty
+        ? challenge.userPreviewAsset
+        : ApiConfig.videoDataUrl(challenge.serverVideoFilename);
+    final session = CompareSession.fromChallenge(
+      challenge,
+      userVideoPath: previewPath,
+      useDevServerVideo: true,
+    );
+
+    ref.read(userVideoPathProvider.notifier).state = previewPath;
+    ref.read(compareSessionProvider.notifier).state = session;
+
+    if (!mounted) return;
+    setState(() => _isRecording = false);
+    context.pop();
+  }
+
   @override
   void dispose() {
-    _reference?.removeListener(_onReferenceProgress);
+    _stopEndWatch();
     _camera?.dispose();
+    _userSubstitute?.dispose();
     _reference?.dispose();
     super.dispose();
   }
@@ -231,7 +370,10 @@ class _StudioRecordScreenState extends ConsumerState<StudioRecordScreen> {
               countdown: _countdown,
               isRecording: _isRecording,
               challengeTitle: challenge?.title ?? '',
+              useDevServerUserVideo: _useDevServerUserVideo,
+              devUserLabel: challenge?.serverVideoFilename ?? '',
               camera: _camera,
+              userSubstitute: _userSubstitute,
               reference: _reference,
               onBack: () {
                 if (_isRecording) {
@@ -253,7 +395,10 @@ class _RecordLayout extends StatelessWidget {
   final int countdown;
   final bool isRecording;
   final String challengeTitle;
+  final bool useDevServerUserVideo;
+  final String devUserLabel;
   final CameraController? camera;
+  final VideoPlayerController? userSubstitute;
   final VideoPlayerController? reference;
   final VoidCallback onBack;
   final VoidCallback onStart;
@@ -263,7 +408,10 @@ class _RecordLayout extends StatelessWidget {
     required this.countdown,
     required this.isRecording,
     required this.challengeTitle,
+    required this.useDevServerUserVideo,
+    required this.devUserLabel,
     required this.camera,
+    required this.userSubstitute,
     required this.reference,
     required this.onBack,
     required this.onStart,
@@ -273,6 +421,8 @@ class _RecordLayout extends StatelessWidget {
   Widget build(BuildContext context) {
     final refReady = reference?.value.isInitialized ?? false;
     final camReady = camera?.value.isInitialized ?? false;
+    final userReady = userSubstitute?.value.isInitialized ?? false;
+    final captureReady = useDevServerUserVideo ? refReady : camReady;
 
     return Stack(
       children: [
@@ -284,11 +434,10 @@ class _RecordLayout extends StatelessWidget {
               onBack: onBack,
             ),
             Expanded(
-              flex: 5,
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
+                padding: const EdgeInsets.all(12),
                 child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
+                  borderRadius: BorderRadius.circular(16),
                   child: ColoredBox(
                     color: AppColors.card,
                     child: refReady
@@ -303,45 +452,13 @@ class _RecordLayout extends StatelessWidget {
                 ),
               ),
             ),
-            const SizedBox(height: 8),
-            Expanded(
-              flex: 5,
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(12),
-                  child: ColoredBox(
-                    color: AppColors.card,
-                    child: camReady
-                        ? CameraPreview(camera!)
-                        : const Center(
-                            child: CircularProgressIndicator(
-                              color: AppColors.neonGreen,
-                              strokeWidth: 2,
-                            ),
-                          ),
-                  ),
-                ),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
-              child: Text(
-                isRecording
-                    ? '레퍼런스가 끝나면 촬영이 자동으로 종료됩니다'
-                    : '레퍼런스와 동시에 재생·촬영됩니다',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
-              ),
-            ),
             if (phase == _RecordPhase.ready)
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
                 child: SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
-                    onPressed: camReady && refReady ? onStart : null,
+                    onPressed: captureReady && refReady ? onStart : null,
                     style: ElevatedButton.styleFrom(
                       backgroundColor: AppColors.neonGreen,
                       foregroundColor: Colors.black,
@@ -363,6 +480,35 @@ class _RecordLayout extends StatelessWidget {
               const SizedBox(height: 56),
           ],
         ),
+        if (captureReady)
+          Positioned(
+            right: 20,
+            bottom: phase == _RecordPhase.ready ? 90 : 80,
+            child: Container(
+              width: 100,
+              height: 150,
+              decoration: BoxDecoration(
+                color: AppColors.card,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: AppColors.neonGreen, width: 2),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    blurRadius: 12,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: useDevServerUserVideo
+                    ? (userReady
+                        ? _VideoFit(controller: userSubstitute!)
+                        : _DevUserPlaceholder(label: devUserLabel))
+                    : CameraPreview(camera!),
+              ),
+            ),
+          ),
         if (phase == _RecordPhase.countdown)
           _CountdownOverlay(value: countdown),
       ],
@@ -434,13 +580,15 @@ class _VideoFit extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return FittedBox(
-      fit: BoxFit.cover,
-      clipBehavior: Clip.hardEdge,
-      child: SizedBox(
-        width: controller.value.size.width,
-        height: controller.value.size.height,
-        child: VideoPlayer(controller),
+    return RepaintBoundary(
+      child: FittedBox(
+        fit: BoxFit.cover,
+        clipBehavior: Clip.hardEdge,
+        child: SizedBox(
+          width: controller.value.size.width,
+          height: controller.value.size.height,
+          child: VideoPlayer(controller),
+        ),
       ),
     );
   }
@@ -463,6 +611,36 @@ class _CountdownOverlay extends StatelessWidget {
             color: Colors.white,
             fontSize: 96,
             fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DevUserPlaceholder extends StatelessWidget {
+  final String label;
+
+  const _DevUserPlaceholder({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return ColoredBox(
+      color: const Color(0xFF1A1A1E),
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.person_outline, color: AppColors.neonBlue, size: 48),
+              const SizedBox(height: 8),
+              Text(
+                label.isEmpty ? '사용자 영상' : label,
+                textAlign: TextAlign.center,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ],
           ),
         ),
       ),

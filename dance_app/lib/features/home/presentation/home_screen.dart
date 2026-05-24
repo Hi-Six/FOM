@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import '../../../core/theme/app_theme.dart';
-import '../../../shared/widgets/card_video_preview.dart';
+import '../../../shared/widgets/challenge_card_thumbnail.dart';
 import '../../../shared/widgets/neon_badge.dart';
 import '../../studio/data/studio_providers.dart';
 import '../data/home_repository.dart';
@@ -118,26 +118,11 @@ class _VideoCard extends StatelessWidget {
               child: Stack(
                 fit: StackFit.expand,
                 children: [
-                  if (video.videoUrl.isNotEmpty)
-                    CardVideoPreview(videoUrl: video.videoUrl)
-                  else
-                    DecoratedBox(
-                      decoration: BoxDecoration(
-                        borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
-                        gradient: LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [
-                            AppColors.neonPurple.withValues(alpha: 0.3),
-                            AppColors.neonGreen.withValues(alpha: 0.2),
-                            AppColors.background,
-                          ],
-                        ),
-                      ),
-                      child: const Center(
-                        child: Icon(Icons.music_note, color: Colors.white24, size: 64),
-                      ),
-                    ),
+                  ChallengeCardThumbnail(
+                    genre: video.genre,
+                    accentColor: _difficultyColor,
+                    imageAsset: video.thumbnailUrl,
+                  ),
                   Positioned(
                     right: 12,
                     bottom: 12,
@@ -213,6 +198,19 @@ class _ChallengeBottomSheet extends StatelessWidget {
 
   const _ChallengeBottomSheet({required this.video, required this.ref});
 
+  static Color _sheetAccentColor(String difficulty) {
+    switch (difficulty) {
+      case '초급':
+        return AppColors.neonGreen;
+      case '중급':
+        return AppColors.neonBlue;
+      case '고급':
+        return AppColors.neonPurple;
+      default:
+        return AppColors.textSecondary;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -236,29 +234,12 @@ class _ChallengeBottomSheet extends StatelessWidget {
           const SizedBox(height: 4),
           Text(video.artist, style: Theme.of(context).textTheme.bodyMedium),
           const SizedBox(height: 20),
-          ClipRRect(
+          ChallengeCardThumbnail(
+            genre: video.genre,
+            accentColor: _sheetAccentColor(video.difficulty),
+            imageAsset: video.thumbnailUrl,
+            height: 120,
             borderRadius: BorderRadius.circular(12),
-            child: video.videoUrl.isNotEmpty
-                ? CardVideoPreview(
-                    videoUrl: video.videoUrl,
-                    height: 120,
-                    borderRadius: BorderRadius.circular(12),
-                  )
-                : Container(
-                    height: 120,
-                    decoration: BoxDecoration(
-                      borderRadius: BorderRadius.circular(12),
-                      gradient: LinearGradient(
-                        colors: [
-                          AppColors.neonPurple.withValues(alpha: 0.25),
-                          AppColors.neonGreen.withValues(alpha: 0.15),
-                        ],
-                      ),
-                    ),
-                    child: const Center(
-                      child: Icon(Icons.play_circle_fill, color: AppColors.neonGreen, size: 56),
-                    ),
-                  ),
           ),
           const SizedBox(height: 24),
           SizedBox(

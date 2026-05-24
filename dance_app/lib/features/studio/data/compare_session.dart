@@ -13,8 +13,11 @@ class CompareSession {
   /// `video_data/cardN/*.json` asset 경로 — `reference_json_file` 업로드.
   final String referenceJsonAsset;
 
-  /// 서버 `video_data/` 사용자 MP4 파일명 (by-name).
+  /// 서버 `video_data/` 사용자 MP4 (by-name).
   final String serverUserVideoFilename;
+
+  /// 서버 `video_data/` 전문가 MP4 (reference JSON 오버레이).
+  final String serverReferenceVideoFilename;
 
   /// true면 촬영 없이 서버 MP4 + by-name.
   final bool useDevServerVideo;
@@ -25,6 +28,7 @@ class CompareSession {
     required this.referenceJson,
     this.referenceJsonAsset = '',
     this.serverUserVideoFilename = '',
+    this.serverReferenceVideoFilename = '',
     this.useDevServerVideo = false,
   });
 
@@ -39,6 +43,7 @@ class CompareSession {
       referenceJson: challenge.referenceJson,
       referenceJsonAsset: challenge.referenceJsonAsset,
       serverUserVideoFilename: challenge.serverVideoFilename,
+      serverReferenceVideoFilename: challenge.serverReferenceVideoFilename,
       useDevServerVideo: useDevServerVideo,
     );
   }
@@ -50,6 +55,7 @@ class CompareSession {
         referenceJson: challenge.referenceJson,
         referenceJsonAsset: challenge.referenceJsonAsset,
         serverUserVideoFilename: challenge.serverVideoFilename,
+        serverReferenceVideoFilename: challenge.serverReferenceVideoFilename,
         useDevServerVideo: true,
       );
 }

@@ -341,7 +341,7 @@ async def analyze_video(
 )
 async def analyze_video_by_name(
     user_video_filename: str = Form(
-        "gBR_sBM_c01_d04_mBR3_ch03.mp4",
+        "Video Project 1 (2).mp4",
         description="video_data/ 사용자(개발) MP4 파일명",
     ),
     reference_json: str = Form(

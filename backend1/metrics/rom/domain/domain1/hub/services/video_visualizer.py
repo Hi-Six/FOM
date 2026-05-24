@@ -43,7 +43,8 @@ def ensure_video_data_dir() -> Path:
     return VIDEO_DATA_DIR
 
 
-MAX_ANNOTATED_WIDTH = 1280
+MAX_ANNOTATED_WIDTH = 854
+MAX_ANNOTATED_HEIGHT = 480
 # 이전 avc1 기본 출력은 ~75MB/2초 수준으로 모바일 스트리밍·재생에 불리함.
 MAX_ANNOTATED_CACHE_BYTES = 15 * 1024 * 1024
 
@@ -83,10 +84,15 @@ def _annotated_output_fps(
 
 
 def _scale_output_size(width: int, height: int) -> tuple[int, int]:
-    if width <= MAX_ANNOTATED_WIDTH:
+    """출력 annotated MP4 — 최대 854×480 (480p) 유지."""
+    scale = min(
+        MAX_ANNOTATED_WIDTH / width,
+        MAX_ANNOTATED_HEIGHT / height,
+        1.0,
+    )
+    if scale >= 1.0:
         return width, height
-    scale = MAX_ANNOTATED_WIDTH / width
-    return int(width * scale), int(height * scale)
+    return max(2, int(width * scale)), max(2, int(height * scale))
 
 
 def _resize_frame(frame: np.ndarray, out_w: int, out_h: int) -> np.ndarray:

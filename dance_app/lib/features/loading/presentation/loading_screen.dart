@@ -95,19 +95,20 @@ class _LoadingScreenState extends ConsumerState<LoadingScreen>
           referenceJson: refJson,
           referenceJsonAsset: session?.referenceJsonAsset ?? '',
           expertVideoDisplayUrl: expertAsset,
-          referenceVideoFilename: serverMp4,
+          referenceVideoFilename:
+              session?.serverReferenceVideoFilename ?? serverMp4,
           userAssetVideoUrl: expertAsset,
           autoDetectStart: true,
         );
       } else {
-        final serverRef = session?.serverUserVideoFilename ?? '';
+        final refVideo = session?.serverReferenceVideoFilename ?? '';
         result = await VideoAnalyzeApi.analyzeVideo(
           userVideoPath: session!.userVideoPath,
           referenceJson: refJson,
           referenceJsonAsset: session.referenceJsonAsset,
           expertVideoDisplayUrl: expertAsset,
           referenceVideoFilename:
-              serverRef.isNotEmpty ? serverRef : null,
+              refVideo.isNotEmpty ? refVideo : null,
           userAssetVideoUrl: expertAsset,
           autoDetectStart: true,
         );

@@ -168,8 +168,7 @@ class _CompareAnalysisCard extends StatelessWidget {
           ),
           const SizedBox(height: 8),
           Text(
-            '전문가·사용자 영상에 reference_json / 추출 결과 기반 포즈 오버레이를 재생합니다. '
-            '재생 실패 시 서버 원본·촬영본·asset 순으로 대체합니다.',
+            '',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 12),
@@ -202,7 +201,7 @@ class _CompareAnalysisCard extends StatelessWidget {
           if (analyze.referenceJson != null) ...[
             const SizedBox(height: 10),
             Text(
-              '채점 레퍼런스 JSON: ${analyze.referenceJson}',
+              '',
               style: Theme.of(context).textTheme.bodySmall?.copyWith(fontSize: 10),
             ),
           ],

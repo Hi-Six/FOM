@@ -28,9 +28,11 @@ class ApiConfig {
     return 'http://127.0.0.1:8000';
   }
 
-  /// `GET /video/data/{filename}` — video_data/ 원본·annotated MP4.
-  static String videoDataUrl(String filename) =>
-      '$baseUrl/video/data/$filename';
+  /// `GET /video/data/{filename}` — domain1/video_data/ MP4 (공백·괄호 URL 인코딩).
+  static String videoDataUrl(String filename) {
+    final base = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    return '$base/video/data/${Uri.encodeComponent(filename)}';
+  }
 
   static String get videoAnalyzeUrl => '$baseUrl/video/analyze';
   static String get videoAnalyzeByNameUrl => '$baseUrl/video/analyze/by-name';

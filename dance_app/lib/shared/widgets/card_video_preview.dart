@@ -119,12 +119,27 @@ class _CardVideoPreviewState extends State<CardVideoPreview> {
       await controller.initialize();
       await controller.setLooping(true);
       await controller.setVolume(0);
-      await controller.play();
+
       if (!mounted) {
         controller.dispose();
         return;
       }
       setState(() => _controller = controller);
+
+      final isNetwork = path.startsWith('http');
+      if (isNetwork) {
+        await Future.delayed(const Duration(milliseconds: 200));
+      }
+
+      await controller.play();
+
+      if (isNetwork && mounted) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (!controller.value.isPlaying && mounted) {
+          await controller.play();
+        }
+      }
+
       _startStallWatch(controller);
     } catch (e) {
       controller.dispose();
