@@ -260,6 +260,31 @@ class _RadarChartCard extends StatelessWidget {
 
   const _RadarChartCard({required this.radar});
 
+  /// fl_chart는 데이터 min~max 상대 스케일이라 최저 점수가 중심에 붙음 → 0점 앵커로 0~100 고정.
+  List<RadarDataSet> _radarDataSets() {
+    final n = radar.axes.length;
+    final anchor = RadarDataSet(
+      dataEntries: List.generate(n, (_) => const RadarEntry(value: 0)),
+      fillColor: Colors.transparent,
+      borderColor: Colors.transparent,
+      borderWidth: 0,
+      entryRadius: 0,
+    );
+    final scores = RadarDataSet(
+      fillColor: AppColors.neonPurple.withValues(alpha: 0.2),
+      borderColor: AppColors.neonPurple,
+      borderWidth: 2,
+      entryRadius: 4,
+      dataEntries: [
+        for (final axis in radar.axes)
+          RadarEntry(
+            value: axis.value.clamp(0.0, 1.0) * TalentRadarData.chartMaxScore,
+          ),
+      ],
+    );
+    return [anchor, scores];
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -305,18 +330,7 @@ class _RadarChartCard extends StatelessWidget {
                 getTitle: (index, _) {
                   return RadarChartTitle(text: radar.axes[index].label);
                 },
-                dataSets: [
-                  RadarDataSet(
-                    fillColor: AppColors.neonPurple.withValues(alpha: 0.2),
-                    borderColor: AppColors.neonPurple,
-                    borderWidth: 2,
-                    entryRadius: 4,
-                    dataEntries: [
-                      for (final axis in radar.axes)
-                        RadarEntry(value: axis.value * 100),
-                    ],
-                  ),
-                ],
+                dataSets: _radarDataSets(),
                 tickBorderData:
                     const BorderSide(color: AppColors.divider, width: 1),
               ),
@@ -358,7 +372,7 @@ class _LegendItem extends StatelessWidget {
         ),
         const SizedBox(width: 4),
         Text(
-          '$label ${(value * 100).toInt()}',
+          '$label ${TalentRadarData.toPercent(value)}',
           style: const TextStyle(color: AppColors.textSecondary, fontSize: 11),
         ),
       ],

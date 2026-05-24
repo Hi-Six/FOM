@@ -176,7 +176,7 @@ def _normalize(pts: Dict[str, Dict[str, float]]) -> Dict[str, Dict[str, float]]:
         torso = 1.0
 
     result: Dict[str, Dict[str, float]] = {}
-    for name in ("left_wrist", "right_wrist", "left_ankle", "right_ankle"):
+    for name in pts:
         result[name] = {
             "x": (pts[name]["x"] - mid_hip["x"]) / torso,
             "y": (pts[name]["y"] - mid_hip["y"]) / torso,

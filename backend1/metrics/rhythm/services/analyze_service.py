@@ -231,7 +231,7 @@ def run_analyze_full(
     ref_video_path: str,
     genre: str = "girl_idol",
 ) -> Dict[str, Any]:
-    """레퍼런스 영상 + 사용자 영상 → 통합 채점 (DTW 50% + Beat 50%)."""
+    """레퍼런스 영상 + 사용자 영상 → 통합 채점 (와우포인트 30% + 비트 70%)."""
     t0 = time.perf_counter()
     user_extraction = run_extraction_and_save(user_video_path)
     t1 = time.perf_counter()

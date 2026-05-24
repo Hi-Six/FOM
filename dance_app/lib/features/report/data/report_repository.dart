@@ -1,4 +1,7 @@
 class TalentRadarData {
+  /// fl_chart 레이더·범례 공통 스케일 (0~100점).
+  static const int chartMaxScore = 100;
+
   final double creativity;
   final double rom;
   final double power;
@@ -14,6 +17,10 @@ class TalentRadarData {
     required this.rhythm,
     required this.accuracy,
   });
+
+  /// API 점수(0~1 정규화) → 0~100 정수 표시.
+  static int toPercent(double normalized) =>
+      (normalized.clamp(0.0, 1.0) * chartMaxScore).round();
 
   /// 레이더 차트 축 순서: 창의성 → 가동범위 → 파워 → 아이솔 → 리듬 → 정확도
   List<({String label, double value})> get axes => [

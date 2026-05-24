@@ -27,6 +27,7 @@ from metrics.isolation.config import REF_ISOLATION_JSON_FILENAME
 from metrics.isolation.score import score_isolation
 from metrics.power import score_power
 from metrics.rhythm.services.scoring.rhythm_scorer import (
+    score_rhythm_combined,
     score_rhythm_from_extraction,
     score_rhythm_vs_reference,
 )
@@ -207,12 +208,32 @@ def _run_power(user_extraction: Dict[str, Any]) -> Dict[str, Any]:
 def _run_rhythm(
     user_extraction: Dict[str, Any],
     ref_extraction: Dict[str, Any],
+    user_video_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     user_frames = user_extraction.get("frames") or []
     ref_frames = ref_extraction.get("frames") or []
-    if len(user_frames) >= 2 and len(ref_frames) >= 2:
-        return score_rhythm_vs_reference(user_extraction, ref_extraction)
-    return score_rhythm_from_extraction(user_extraction)
+    ref_has_landmarks = bool(ref_frames and ref_frames[0].get("normalized_landmarks"))
+
+    if not (len(user_frames) >= 2 and len(ref_frames) >= 2 and ref_has_landmarks):
+        result = score_rhythm_from_extraction(user_extraction)
+        if ref_frames and not ref_has_landmarks:
+            result.setdefault("breakdown", {})["warning"] = (
+                "ref_no_normalized_landmarks: reference JSON이 rom 모드 — 자기일관성으로만 채점"
+            )
+        return result
+
+    # 음악 비트 추출 시도 — 성공하면 에너지+와우+비트 통합 채점, 실패하면 에너지+와우만
+    beat_data = None
+    if user_video_path:
+        try:
+            from metrics.rhythm.services.beat_service import extract_beats
+            beat_data = extract_beats(user_video_path)
+        except Exception:
+            pass
+
+    if beat_data:
+        return score_rhythm_combined(user_extraction, ref_extraction, beat_data)
+    return score_rhythm_vs_reference(user_extraction, ref_extraction)
 
 
 def compute_total_score(scores: Dict[str, Dict[str, Any]]) -> tuple[float, str]:
@@ -309,9 +330,10 @@ async def run_all_scores(
             _run_metric_in_executor(lambda: _run_power(user_extraction))
         )
     if "rhythm" in enabled_metrics:
+        _uvp = user_video_path
         tasks["rhythm"] = asyncio.create_task(
             _run_metric_in_executor(
-                lambda: _run_rhythm(user_extraction, ref_extraction)
+                lambda: _run_rhythm(user_extraction, ref_extraction, _uvp)
             )
         )
 

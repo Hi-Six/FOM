@@ -22,7 +22,6 @@ ExtractPipeline = Literal["rom", "rhythm", "power", "creativity", "isolation"]
 
 DEFAULT_EXTRACT_PIPELINES: tuple[ExtractPipeline, ...] = (
     "rom",
-    "rhythm",
     "power",
     "creativity",
 )
@@ -86,8 +85,17 @@ def _run_rom_extract(
 
 def _run_rhythm_extract(video_path: str) -> Dict[str, Any]:
     from metrics.rhythm.services.extraction_service import extract_rhythm_data
+    from metrics.rhythm.services.beat_service import extract_beats
 
     data = extract_rhythm_data(video_path)
+
+    has_beats = False
+    try:
+        data["beat_data"] = extract_beats(video_path)
+        has_beats = True
+    except Exception:
+        pass
+
     base = make_extraction_basename()
     filename = f"{base}_rhythm.json"
     save_extraction_json(data, filename)
@@ -96,7 +104,11 @@ def _run_rhythm_extract(video_path: str) -> Dict[str, Any]:
         "metric": "rhythm",
         "json_filename": filename,
         "canonical": False,
-        "meta": {"fps": data.get("fps"), "total_frames": data.get("total_frames")},
+        "meta": {
+            "fps": data.get("fps"),
+            "total_frames": data.get("total_frames"),
+            "has_beat_data": has_beats,
+        },
     }
 
 

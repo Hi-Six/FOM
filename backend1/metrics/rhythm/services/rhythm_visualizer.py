@@ -30,6 +30,7 @@ C_PEAK_MK = (80,   80, 255)
 BEAT_FLASH  = 5   # 비트 발생 후 강조 프레임 수
 PEAK_FLASH  = 4   # 동작 피크 발생 후 강조 프레임 수
 OFFSET_WIN_MS = 400.0  # Beat vs Peak 오프셋 그래프 표시 범위 (±ms)
+_BEAT_TOL_VIZ = 0.2    # 비트 적중 판정 허용 오차 (초) — rhythm_scorer와 동일
 
 # ── 키포인트 설정 ──────────────────────────────────────────────────
 _KP_COLORS = {
@@ -87,6 +88,16 @@ def render_rhythm_video(
         beat_times = beat_data.get("beat_times_sec") or []
         tempo_bpm = beat_data.get("tempo_bpm") or 0.0
     beat_frames = {int(round(t * fps)) for t in beat_times}
+
+    # ── 비트별 적중 여부 사전 계산 ────────────────────────────────
+    # (beat_frame, hit: bool, offset_ms: float)
+    beat_results: List[Tuple[int, bool, float]] = []
+    if beat_times and peak_indices:
+        for bt in beat_times:
+            bf = int(round(bt * fps))
+            nearest_pi = min(peak_indices, key=lambda p: abs(p - bf))
+            off_sec = (nearest_pi - bf) / fps
+            beat_results.append((bf, abs(off_sec) <= _BEAT_TOL_VIZ, round(off_sec * 1000.0, 1)))
 
     # ── 점수 정보 ────────────────────────────────────────────────
     score_val: Optional[float] = None
@@ -147,6 +158,7 @@ def render_rhythm_video(
         panel = _build_panel(
             fi, fps, velocity, peak_indices,
             beat_times, tempo_bpm, score_val, hit_rate, judgment, vid_h,
+            beat_results,
         )
 
         # 하단 타임라인
@@ -207,6 +219,7 @@ def _build_panel(
     hit_rate: Optional[float],
     judgment: Optional[Dict[str, Any]],
     panel_h: int,
+    beat_results: Optional[List[Tuple[int, bool, float]]] = None,
 ) -> np.ndarray:
     panel = np.full((panel_h, PANEL_W, 3), C_PANEL, dtype=np.uint8)
     y = 30
@@ -223,10 +236,26 @@ def _build_panel(
 
     if tempo_bpm:
         put(f"BPM : {tempo_bpm:.1f}", C_BEAT_MK)
+
+    # 점수 + 프로그레스 바
     if score_val is not None:
         color = _score_color(score_val)
         put(f"Score: {score_val:.1f}", color, 0.55)
-    if hit_rate is not None:
+        _draw_score_bar(panel, score_val, 12, y - 4, PANEL_W - 24)
+        y += 18
+
+    # 누적 Hit/Miss 카운터 (프레임 진행에 따라 실시간 업데이트)
+    passed = [r for r in (beat_results or []) if r[0] <= fi]
+    if passed:
+        n_hit = sum(1 for _, h, _ in passed)
+        n_total = len(passed)
+        running_pct = n_hit / n_total * 100
+        h_color = _score_color(running_pct)
+        put(f"Hit  : {n_hit}/{n_total}  ({running_pct:.0f}%)", h_color)
+        # 최근 비트 적중 여부 dot 표시
+        _draw_beat_dots(panel, passed, 12, y, PANEL_W - 24)
+        y += 20
+    elif hit_rate is not None:
         put(f"Hit  : {hit_rate*100:.1f}%")
 
     # 판정 결과
@@ -435,3 +464,37 @@ def _score_color(score: float) -> Tuple:
     if score >= 60:
         return (80, 200, 255)    # 노랑
     return (80, 80, 255)         # 파랑 (낮음)
+
+
+def _draw_score_bar(
+    panel: np.ndarray,
+    score: float,
+    ox: int, oy: int, w: int,
+    h: int = 10,
+) -> None:
+    """점수를 가로 프로그레스 바로 표시."""
+    cv2.rectangle(panel, (ox, oy), (ox + w, oy + h), C_BAR_BG, -1)
+    fill = int(score / 100.0 * w)
+    if fill > 0:
+        cv2.rectangle(panel, (ox, oy), (ox + fill, oy + h), _score_color(score), -1)
+    # 점수 텍스트를 바 오른쪽 끝에 작게 표시
+    cv2.putText(panel, f"{score:.0f}", (ox + w + 4, oy + h),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.35, C_TEXT, 1, cv2.LINE_AA)
+
+
+def _draw_beat_dots(
+    panel: np.ndarray,
+    passed_results: List[Tuple[int, bool, float]],
+    ox: int, oy: int, w: int,
+    max_dots: int = 14,
+) -> None:
+    """최근 비트 적중 여부를 컬러 dot으로 표시. 초록=hit, 파랑=miss."""
+    recent = passed_results[-max_dots:]
+    r = 5
+    spacing = w // max_dots
+    for i, (_, hit, _) in enumerate(recent):
+        cx = ox + i * spacing + r
+        cy = oy + r
+        color = (60, 220, 60) if hit else (60, 60, 220)
+        cv2.circle(panel, (cx, cy), r, color, -1, cv2.LINE_AA)
+        cv2.circle(panel, (cx, cy), r, (180, 180, 180), 1, cv2.LINE_AA)
