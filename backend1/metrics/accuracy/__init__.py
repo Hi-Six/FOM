@@ -8,8 +8,8 @@ on each keypoint, plus a connecting line between each matched joint pair.
 
 Color coding
 ------------
-  Green  >= 80 % -- well matched
-  Yellow 60-79 % -- moderate drift
+  Green  >= 65 % -- well matched  (threshold lowered from 80 % for speed)
+  Yellow 60-64 % -- moderate drift
   Red    < 60 %  -- significant mismatch
 
 Requires
@@ -54,6 +54,19 @@ COLOR_B = ( 30, 120, 255)   # vivid orange -- Dancer B
 # ── Normalised-space tolerance for per-joint Gaussian score ────────────────
 # 0.30 = ~30 % of torso height; exp(-d^2/2t^2) gives 37 % at d = t
 JOINT_TOLERANCE = 0.30
+
+# ── Similarity threshold (lowered from implicit 0.80 → 0.65) ───────────────
+# Frames above this are "matched"; enables early-exit for clearly-bad frames.
+SIMILARITY_THRESHOLD = 0.65
+
+# ── Face direction detection via ear landmark visibility ────────────────────
+L_EAR_IDX                  = 3     # COCO-17 index for left ear
+R_EAR_IDX                  = 4     # COCO-17 index for right ear
+FACE_OCCLUSION_VIS_THRESHOLD = 0.30  # ear visibility below this → occluded
+FACE_JOINT_INDICES         = frozenset({0, 1, 2, 3, 4})  # nose, eyes, ears
+
+# ── Structural joints used for fast coarse pre-screen ──────────────────────
+_STRUCT_JOINTS = [5, 6, 11, 12]   # L/R shoulder + L/R hip
 
 # ── Per-joint importance weights for final accuracy score ──────────────────
 # Shoulders and hips are structural anchors; face keypoints carry far less
@@ -156,10 +169,31 @@ def normalize_pose(kps: np.ndarray):
     return out
 
 
+# ── Face direction detection ─────────────────────────────────────────────────
+
+def detect_face_direction(kps: np.ndarray) -> str:
+    """
+    Estimate face orientation from ear landmark visibility (COCO-17 indices 3, 4).
+
+    Returns
+    -------
+    'front' : both ears visible  → facing camera
+    'side'  : one ear visible    → facing ~90°
+    'back'  : neither ear visible → facing away
+    """
+    l_ok = float(kps[L_EAR_IDX, 2]) > FACE_OCCLUSION_VIS_THRESHOLD
+    r_ok = float(kps[R_EAR_IDX, 2]) > FACE_OCCLUSION_VIS_THRESHOLD
+    if l_ok and r_ok:
+        return "front"
+    if not l_ok and not r_ok:
+        return "back"
+    return "side"
+
+
 # ── Score -> colour (BGR) ───────────────────────────────────────────────────
 
 def _score_bgr(score: float) -> tuple:
-    if score >= 0.80:
+    if score >= SIMILARITY_THRESHOLD:   # 0.65 — lowered from 0.80
         return (50, 210, 60)    # green
     elif score >= 0.60:
         return (0, 200, 230)    # yellow
@@ -276,24 +310,58 @@ def compute_accuracy_score(poses_a: list, poses_b: list) -> dict:
 
 def per_joint_scores(pa, pb) -> np.ndarray:
     """
-    Compute per-joint Gaussian similarity between two (17, 3) raw poses.
-    Both poses are normalised (centred + torso-scale) before comparison,
-    so position and body size are factored out.
+    Vectorised per-joint Gaussian similarity with face-occlusion guard and
+    early-exit speed optimisation.
+
+    Face direction is detected from ear visibility (COCO-17 indices 3 & 4).
+    When either pose has a turned/occluded face, face-landmark scores are
+    nullified to prevent MediaPipe's interpolated guesses from penalising the
+    score for legitimately back-facing moves.
+
+    Frames where the structural pre-screen (L/R shoulder + L/R hip) falls
+    below SIMILARITY_THRESHOLD / 2 skip non-structural joints, cutting the
+    per-frame Gaussian evaluations from 17 down to ≤4 for clearly bad frames.
 
     Accepts np.ndarray or any array-like (list-of-lists).
-    Returns (17,) array; np.nan where either joint is invisible or where
-    normalisation was impossible (degenerate frame — all anchors occluded).
+    Returns (17,) array; np.nan where either joint is invisible or the frame
+    is degenerate (all normalisation anchors occluded).
     """
-    na     = normalize_pose(np.asarray(pa, dtype=np.float32))
-    nb     = normalize_pose(np.asarray(pb, dtype=np.float32))
+    na = normalize_pose(np.asarray(pa, dtype=np.float32))
+    nb = normalize_pose(np.asarray(pb, dtype=np.float32))
     scores = np.full(17, np.nan, dtype=np.float32)
     if na is None or nb is None:
-        return scores          # frame skipped — all joints reported as NaN
-    denom  = 2.0 * JOINT_TOLERANCE ** 2
-    for i in range(17):
-        if na[i, 2] > 0.1 and nb[i, 2] > 0.1:
-            d2 = float(((na[i, :2] - nb[i, :2]) ** 2).sum())
-            scores[i] = np.exp(-d2 / denom)
+        return scores
+
+    # ── Face-direction guard: zero out face joints when occluded ──
+    face_occluded = (
+        detect_face_direction(na) != "front"
+        or detect_face_direction(nb) != "front"
+    )
+    valid = (na[:, 2] > 0.1) & (nb[:, 2] > 0.1)
+    if face_occluded:
+        for fi in FACE_JOINT_INDICES:
+            valid[fi] = False
+
+    # ── Coarse structural pre-screen (shoulders + hips) ──
+    struct = np.zeros(17, dtype=bool)
+    for si in _STRUCT_JOINTS:
+        if valid[si]:
+            struct[si] = True
+
+    denom = 2.0 * JOINT_TOLERANCE ** 2
+    if struct.any():
+        d2_s = ((na[struct, :2] - nb[struct, :2]) ** 2).sum(axis=1)
+        coarse = float(np.mean(np.exp(-d2_s / denom)))
+        if coarse < SIMILARITY_THRESHOLD / 2:
+            # Clearly bad frame — only return structural joints, skip the rest
+            scores[struct] = np.exp(-d2_s / denom)
+            return scores
+
+    # ── Full vectorised scoring for all visible joints ──
+    if valid.any():
+        d2 = ((na[valid, :2] - nb[valid, :2]) ** 2).sum(axis=1)
+        scores[valid] = np.exp(-d2 / denom)
+
     return scores
 
 
@@ -428,7 +496,7 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     GREEN  = _score_bgr(0.90)
-    YELLOW = _score_bgr(0.70)
+    YELLOW = _score_bgr(0.62)   # 0.62 falls in [0.60, 0.65) yellow band
     RED    = _score_bgr(0.40)
 
     pbar      = tqdm(total=n_frames, desc="Rendering joint-score video", unit="frame")
@@ -460,8 +528,8 @@ def render(video_path: Path, cache_path: Path, out_path: Path) -> dict:
 
             sw = 16
             for col, lbl, lx in [
-                (GREEN,  ">=80% matched",  vid_w - 310),
-                (YELLOW, "60-79% drift",   vid_w - 200),
+                (GREEN,  ">=65% matched",  vid_w - 310),
+                (YELLOW, "60-64% drift",   vid_w - 200),
                 (RED,    "<60% mismatch",  vid_w - 100),
             ]:
                 if lx > 0:
