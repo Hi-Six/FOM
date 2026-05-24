@@ -16,7 +16,8 @@ from routers.video import router as video_router
 from metrics.creativity.router import router as creativity_router
 from metrics.isolation.router import router as isolation_router
 from metrics.power.routers.video import router as power_router
-from metrics.rhythm.routers.video import router as rhythm_router
+# rhythm 채점은 POST /video/analyze (orchestrator) — /rhythm/* 레거시 라우터 비활성
+# from metrics.rhythm.routers.video import router as rhythm_router
 
 app = FastAPI(
     title="FOM — Dance Analysis API",
@@ -26,7 +27,7 @@ app = FastAPI(
         "POST /video/analyze/json — 저장 JSON 2개, 6 metric 병렬 채점. "
         "POST /creativity/analyze — 창의성 전체 파이프라인(음악 구간·50프레임·DTW). "
         "POST /video/extract — ROM domain1 추출. "
-        "POST /rhythm/* — rhythm 전용 (레거시·개발)."
+        "rhythm 채점 — POST /video/analyze (metrics/rhythm scorer, /rhythm/* 비활성)."
     ),
     version="0.1.0",
 )
@@ -41,7 +42,7 @@ app.add_middleware(
 # prefix 충돌 방지: /video = 통합, /creativity /rhythm /isolation /power = metric 전용
 app.include_router(video_router)
 app.include_router(creativity_router)
-app.include_router(rhythm_router)
+# app.include_router(rhythm_router)
 app.include_router(isolation_router)
 app.include_router(power_router)
 
@@ -55,7 +56,7 @@ def health() -> dict:
         "routes": {
             "video": "/video/*",
             "creativity": "/creativity/*",
-            "rhythm": "/rhythm/*",
+            "rhythm": "POST /video/analyze (orchestrator)",
             "isolation": "/isolation/*",
             "power": "/power/*",
         },

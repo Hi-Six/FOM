@@ -35,19 +35,13 @@ _MIN_PEAK_DISTANCE = 5
 _NORMALIZED_PROMINENCE = 0.25
 _CV_SCALE = 2.0
 
-# DTW 파라미터
-_DOWNSAMPLE_FPS = 5.0        # 계산량 절감용 다운샘플 목표 FPS
-_DTW_WINDOW = 50             # Sakoe-Chiba 밴드 (다운샘플 프레임 기준)
-_DTW_SCALE = 2.0             # 점수 감쇠 강도 (높을수록 엄격)
-
-# consistency는 점수에 반영하지 않고 breakdown 진단용으로만 사용
-_CONSISTENCY_WEIGHT = 0.0
+# 에너지 윈도우 파라미터
+_ENERGY_WINDOW_SEC = 0.5     # 구간 크기 (초)
 
 # 음악 비트 비교 파라미터
 _BEAT_TOLERANCE_SEC = 0.2    # 비트와 동작 피크 간 허용 오차 (초)
 _BEAT_HIT_WEIGHT = 0.7       # 비트 적중률 가중치
 _BEAT_PRECISION_WEIGHT = 0.3 # 타이밍 정밀도 가중치
-_DTW_WEIGHT = 1.0
 
 # 통합 채점 (레퍼런스 영상 + 비트) 가중치: beat 70%, wow 30%
 _FULL_WOW_WEIGHT = 0.3
@@ -57,6 +51,15 @@ _FULL_BEAT_WEIGHT = 0.7
 _WOW_TOLERANCE_SEC = 0.25   # 와우 포인트 허용 오차 (초)
 _WOW_HIT_WEIGHT = 0.7       # 적중률 가중치
 _WOW_PRECISION_WEIGHT = 0.3 # 타이밍 정밀도 가중치
+
+# 레퍼런스만 있을 때 가중치 (비트 없음): 에너지 60% + 와우포인트 40%
+_REF_ONLY_ENERGY_WEIGHT = 0.6
+_REF_ONLY_WOW_WEIGHT = 0.4
+
+# 레퍼런스 + 비트 통합 채점 가중치: 에너지 40% + 와우포인트 20% + 비트 40%
+_COMBINED_ENERGY_WEIGHT = 0.4
+_COMBINED_WOW_WEIGHT = 0.2
+_COMBINED_BEAT_WEIGHT = 0.4
 
 
 def _resolve_keypoints(genre: str) -> List[str]:
@@ -108,8 +111,8 @@ def score_rhythm_vs_reference(
     genre: str = "girl_idol",
 ) -> Dict[str, Any]:
     """
-    사용자 vs 레퍼런스 속도 신호를 DTW로 비교한 뒤,
-    자기일관성 점수와 가중 합산하여 최종 점수 반환.
+    사용자 vs 레퍼런스: 에너지 패턴 상관관계(60%) + 와우포인트 매칭(40%) 채점.
+    음악 비트 데이터가 없을 때 사용. 비트까지 필요하면 score_rhythm_combined 사용.
 
     반환: {"score": float, "breakdown": dict, "frame_diffs": list}
     """
@@ -125,41 +128,86 @@ def score_rhythm_vs_reference(
     user_sig = _velocity_signal(user_frames, keypoints)
     ref_sig = _velocity_signal(ref_frames, keypoints)
 
-    # 다운샘플 → 단위분산 정규화 (진폭 편향 제거)
-    user_ds = _downsample(user_sig, user_fps, _DOWNSAMPLE_FPS)
-    ref_ds = _downsample(ref_sig, ref_fps, _DOWNSAMPLE_FPS)
-    user_norm = user_ds / (user_ds.std() + 1e-9)
-    ref_norm = ref_ds / (ref_ds.std() + 1e-9)
-
-    dtw_dist = _dtw_distance(user_norm, ref_norm, radius=_DTW_WINDOW)
-    avg_len = (len(user_norm) + len(ref_norm)) / 2.0
-    normalized_dist = dtw_dist / (avg_len + 1e-9)
-
-    # inf/nan 방어: JSON 직렬화 불가 값을 최악 점수(worst case)로 대체
-    if not np.isfinite(normalized_dist):
-        normalized_dist = float(avg_len)
-
-    dtw_score = float(np.clip(100.0 * np.exp(-normalized_dist * _DTW_SCALE), 0.0, 100.0))
-
-    # 자기일관성 점수도 계산
-    consistency_result = score_rhythm_from_extraction(user_extraction, genre=genre)
-    consistency_score = consistency_result["score"]
+    energy_score = _energy_correlation_score(user_sig, ref_sig, user_fps, ref_fps)
+    wow_result = score_wow_points_vs_reference(user_extraction, ref_extraction, genre=genre)
+    wow_score = wow_result["score"]
 
     combined = round(
-        _CONSISTENCY_WEIGHT * consistency_score + _DTW_WEIGHT * dtw_score, 2
+        _REF_ONLY_ENERGY_WEIGHT * energy_score + _REF_ONLY_WOW_WEIGHT * wow_score, 2
     )
 
     breakdown = {
-        **consistency_result["breakdown"],
-        "dtw_score": round(dtw_score, 2),
-        "dtw_distance_normalized": round(normalized_dist, 4),
-        "consistency_score": consistency_score,
-        "consistency_weight": _CONSISTENCY_WEIGHT,
-        "dtw_weight": _DTW_WEIGHT,
-        "user_frames_downsampled": len(user_norm),
-        "ref_frames_downsampled": len(ref_norm),
+        "genre": genre,
+        "keypoints_used": keypoints,
+        "energy_score": round(energy_score, 2),
+        "wow_score": wow_score,
+        "energy_weight": _REF_ONLY_ENERGY_WEIGHT,
+        "wow_weight": _REF_ONLY_WOW_WEIGHT,
+        "wow_detail": wow_result["breakdown"],
     }
     return {"score": combined, "breakdown": breakdown, "frame_diffs": []}
+
+
+def score_rhythm_combined(
+    user_extraction: Dict[str, Any],
+    ref_extraction: Dict[str, Any],
+    beat_data: Dict[str, Any],
+    genre: str = "girl_idol",
+) -> Dict[str, Any]:
+    """
+    레퍼런스 영상 + 음악 비트 통합 채점.
+
+    - energy_score (40%): 레퍼런스 대비 구간별 운동에너지 패턴 일치도
+    - wow_score    (20%): 강조·정지 포인트 타이밍 일치도
+    - beat_score   (40%): 동작 피크가 음악 비트에 얼마나 맞는가
+
+    반환: {"score": float, "breakdown": dict, "frame_diffs": list, "judgment": dict}
+    """
+    keypoints = _resolve_keypoints(genre)
+    user_fps = float(user_extraction.get("fps") or 30.0)
+    ref_fps = float(ref_extraction.get("fps") or 30.0)
+    user_frames = user_extraction.get("frames") or []
+    ref_frames = ref_extraction.get("frames") or []
+
+    if len(user_frames) < 2 or len(ref_frames) < 2:
+        return {"score": 0.0, "breakdown": {"error": "insufficient_frames"}, "frame_diffs": []}
+
+    user_sig = _velocity_signal(user_frames, keypoints)
+    ref_sig = _velocity_signal(ref_frames, keypoints)
+
+    energy_score = _energy_correlation_score(user_sig, ref_sig, user_fps, ref_fps)
+    wow_result = score_wow_points_vs_reference(user_extraction, ref_extraction, genre=genre)
+    beat_result = score_motion_vs_beats(user_extraction, beat_data, genre=genre)
+
+    wow_score = wow_result["score"]
+    beat_score = beat_result["score"]
+
+    combined = round(
+        _COMBINED_ENERGY_WEIGHT * energy_score
+        + _COMBINED_WOW_WEIGHT * wow_score
+        + _COMBINED_BEAT_WEIGHT * beat_score,
+        2,
+    )
+
+    breakdown = {
+        "genre": genre,
+        "keypoints_used": keypoints,
+        "music_tempo_bpm": beat_data.get("tempo_bpm"),
+        "energy_score": round(energy_score, 2),
+        "wow_score": wow_score,
+        "beat_score": beat_score,
+        "energy_weight": _COMBINED_ENERGY_WEIGHT,
+        "wow_weight": _COMBINED_WOW_WEIGHT,
+        "beat_weight": _COMBINED_BEAT_WEIGHT,
+        "wow_detail": wow_result["breakdown"],
+        "beat_detail": beat_result["breakdown"],
+    }
+    return {
+        "score": combined,
+        "breakdown": breakdown,
+        "frame_diffs": [],
+        "judgment": beat_result.get("judgment"),
+    }
 
 
 def score_motion_vs_beats(
@@ -354,6 +402,41 @@ def score_motion_full(
 
 # ──────────────────────────── 내부 유틸 ────────────────────────────
 
+def _windowed_energy_profile(
+    signal: np.ndarray, fps: float, window_sec: float = _ENERGY_WINDOW_SEC
+) -> np.ndarray:
+    """속도 신호를 윈도우로 분할해 각 구간 RMS 에너지 반환."""
+    window_size = max(1, int(round(fps * window_sec)))
+    n_windows = max(1, len(signal) // window_size)
+    return np.array([
+        float(np.sqrt(np.mean(signal[i * window_size:(i + 1) * window_size] ** 2)))
+        for i in range(n_windows)
+    ])
+
+
+def _energy_correlation_score(
+    user_sig: np.ndarray,
+    ref_sig: np.ndarray,
+    user_fps: float,
+    ref_fps: float,
+) -> float:
+    """구간별 에너지 프로파일 Pearson 상관관계 → 0~100점."""
+    user_rms = _windowed_energy_profile(user_sig, user_fps)
+    ref_rms = _windowed_energy_profile(ref_sig, ref_fps)
+
+    n = min(len(user_rms), len(ref_rms))
+    if n < 2:
+        return 0.0
+
+    u = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(user_rms)), user_rms)
+    r = np.interp(np.linspace(0, 1, n), np.linspace(0, 1, len(ref_rms)), ref_rms)
+
+    corr = np.corrcoef(u, r)[0, 1]
+    if not np.isfinite(corr):
+        corr = -1.0
+    return float(np.clip((corr + 1) / 2 * 100, 0.0, 100.0))
+
+
 def _compute_judgment(
     beat_times: List[float],
     peak_indices: List[int],
@@ -487,58 +570,3 @@ def _detect_wow_points(signal: np.ndarray, fps: float) -> List[float]:
     return [round(int(idx) / fps, 4) for idx in all_indices]
 
 
-def _downsample(signal: np.ndarray, orig_fps: float, target_fps: float) -> np.ndarray:
-    step = max(1, int(round(orig_fps / target_fps)))
-    return signal[::step]
-
-
-def _dtw_distance(a: np.ndarray, b: np.ndarray, radius: int = 50) -> float:
-    return _dtw_align(a, b, radius)[0]
-
-
-def _dtw_align(
-    a: np.ndarray, b: np.ndarray, radius: int = 50
-) -> "tuple[float, list[tuple[int, int]]]":
-    """Sakoe-Chiba 밴드 제약 DTW — 총 거리와 정렬 경로를 함께 반환.
-
-    반환: (distance, path)
-      path: [(i, j), ...] 인덱스 쌍 목록 (a[i] ↔ b[j] 대응)
-    """
-    n, m = len(a), len(b)
-    effective_radius = max(radius, abs(n - m) + 1)
-
-    dp = np.full((n, m), np.inf)
-    dp[0, 0] = abs(float(a[0]) - float(b[0]))
-
-    for i in range(1, min(n, effective_radius + 1)):
-        dp[i, 0] = dp[i - 1, 0] + abs(float(a[i]) - float(b[0]))
-    for j in range(1, min(m, effective_radius + 1)):
-        dp[0, j] = dp[0, j - 1] + abs(float(a[0]) - float(b[j]))
-
-    for i in range(1, n):
-        j_lo = max(1, i - effective_radius)
-        j_hi = min(m, i + effective_radius + 1)
-        for j in range(j_lo, j_hi):
-            cost = abs(float(a[i]) - float(b[j]))
-            dp[i, j] = cost + min(dp[i - 1, j], dp[i, j - 1], dp[i - 1, j - 1])
-
-    # 역추적으로 정렬 경로 복원
-    path: list[tuple[int, int]] = []
-    i, j = n - 1, m - 1
-    while i > 0 or j > 0:
-        path.append((i, j))
-        if i == 0:
-            j -= 1
-        elif j == 0:
-            i -= 1
-        else:
-            prev = min(
-                (dp[i - 1, j - 1], i - 1, j - 1),
-                (dp[i - 1, j],     i - 1, j),
-                (dp[i,     j - 1], i,     j - 1),
-            )
-            i, j = prev[1], prev[2]
-    path.append((0, 0))
-    path.reverse()
-
-    return float(dp[n - 1, m - 1]), path
