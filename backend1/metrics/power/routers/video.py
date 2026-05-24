@@ -51,6 +51,7 @@ def _load_json(filename: str) -> dict:
 
 class ScoreRequest(BaseModel):
     extraction_json: str
+    reference_json: str
 
 
 @router.post(
@@ -109,7 +110,14 @@ async def score_video(body: ScoreRequest):
         raise HTTPException(status_code=404, detail=str(e))
 
     try:
-        result = score_power(data)
+        ref_data = _load_json(body.reference_json)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    try:
+        result = score_power(data, ref_data)
         score_json_name = body.extraction_json.replace(".json", "_score.json")
         _save_json(result, score_json_name)
         result["score_json"] = score_json_name
