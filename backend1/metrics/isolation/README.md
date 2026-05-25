@@ -5,6 +5,13 @@
 - **Tasks API** + `mediapipe>=0.10.31` (`mediapipe_pose_tasks.py`)
 - **0.10.30은 Windows/Python 3.12에서 사용 불가** (`function 'free' not found`) → **0.10.31 이상**
 
+## 추출 GPU (기본)
+
+- **YOLO11**: CUDA 있으면 `device=0` (Ultralytics)
+- **MediaPipe Pose**: GPU delegate 우선, 실패 시 CPU fallback
+- CLI 기본 `--device auto` — CPU만: `--device cpu`
+- 추출 JSON `extraction_device` 필드에 실제 사용 디바이스 기록
+
 ## Git에 올리지 않는 것
 
 | 항목 | 위치 | 준비 방법 |

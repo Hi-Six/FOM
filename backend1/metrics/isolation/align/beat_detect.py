@@ -86,10 +86,12 @@ def detect_beats_from_video(
     *,
     sr: int = 22050,
     hop_length: int = 512,
+    start_bpm: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     mp4 등에서 오디오를 읽어 비트 시각(초) 목록 반환.
     ffmpeg 없으면 ImportError / 파일 오류 발생.
+    start_bpm: librosa beat_track 탐색 시작 BPM (ref BPM을 hint로 주면 일관성 향상).
     """
     path = Path(video_path)
     if not path.is_file():
@@ -99,9 +101,15 @@ def detect_beats_from_video(
     import librosa
 
     onset_env = librosa.onset.onset_strength(y=y, sr=loaded_sr, hop_length=hop_length)
-    tempo, beat_frames = librosa.beat.beat_track(
-        y=y, sr=loaded_sr, hop_length=hop_length, onset_envelope=onset_env
-    )
+    beat_kwargs: Dict[str, Any] = {
+        "y": y,
+        "sr": loaded_sr,
+        "hop_length": hop_length,
+        "onset_envelope": onset_env,
+    }
+    if start_bpm and start_bpm > 0:
+        beat_kwargs["start_bpm"] = float(start_bpm)
+    tempo, beat_frames = librosa.beat.beat_track(**beat_kwargs)
     beat_times = librosa.frames_to_time(beat_frames, sr=loaded_sr)
     times = [float(t) for t in np.asarray(beat_times).ravel() if float(t) >= 0]
 
@@ -224,12 +232,15 @@ def beats_for_extraction(
     beats_json: Path | None = None,
     cache_path: Path | None = None,
     video_override: Path | None = None,
+    bpm_hint: Optional[float] = None,
 ) -> Dict[str, Any]:
-    """캐시 JSON 이 있으면 로드, 없으면 영상에서 추출 후 저장."""
-    def _cache_ok(data: Dict[str, Any]) -> bool:
+    """캐시 JSON 이 있으면 로드, 없으면 영상에서 추출 후 저장.
+    bpm_hint: ref BPM 을 librosa 탐색 시작점으로 주면 user/ref BPM 일관성이 높아진다.
+    """
+    def _cache_ok(d: Dict[str, Any]) -> bool:
         if not ALIGN_TO_MUSIC_START:
             return True
-        return "music_start_sec" in data
+        return "music_start_sec" in d
 
     if beats_json and Path(beats_json).is_file():
         cached = load_beat_map(beats_json)
@@ -241,7 +252,7 @@ def beats_for_extraction(
             return cached
 
     video = video_path_for_extraction(data, video_override=video_override)
-    beat_data = detect_beats_from_video(video)
+    beat_data = detect_beats_from_video(video, start_bpm=bpm_hint if bpm_hint and bpm_hint > 0 else None)
     if cache_path:
         save_beat_map(beat_data, cache_path)
     return beat_data
@@ -251,11 +262,13 @@ def estimate_beat_lag_sec(
     ref_beats: List[float],
     user_beats: List[float],
     *,
-    max_beats: int = 48,
+    max_beats: int = 8,
 ) -> float:
     """
     user 비트축을 ref 비트축에 맞추기 위한 시각 오프셋(초).
     user_time + lag ≈ ref_time (같은 박 인덱스).
+
+    초반 8비트만 사용 — BPM이 살짝 달라도 누적 오차가 생기기 전 구간으로 한정.
     """
     n = min(len(ref_beats), len(user_beats), max_beats)
     if n < MIN_BEATS:

@@ -15,6 +15,7 @@ from metrics.isolation.config import (
     DATA_ARTIFACTS,
     DATA_RAW,
     DEFAULT_ALIGNMENT_METHOD,
+    EXTRACTION_DEVICE_DEFAULT,
     REF_COMPARE_DURATION_SEC,
     REF_ISOLATION_JSON_FILENAME,
     REF_VIDEO_NAME,
@@ -100,6 +101,7 @@ def extract_isolation_to_video_json(video_path: str | Path) -> Dict[str, Any]:
         tracks_json_path=None,
         reuse_yolo=True,
         progress_every=0,
+        device=EXTRACTION_DEVICE_DEFAULT,
     )
     base = make_extraction_basename()
     filename = f"{base}_isolation.json"

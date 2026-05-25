@@ -14,10 +14,12 @@ from mediapipe_pose_tasks import (
 )
 from metrics.isolation.config import (
     CROP_PADDING_RATIO,
+    EXTRACTION_DEVICE_DEFAULT,
     MP_MIN_DETECTION_CONFIDENCE,
     MP_MIN_TRACKING_CONFIDENCE,
     MP_POSE_MODEL,
 )
+from metrics.isolation.device import resolve_mediapipe_delegate
 from metrics.isolation.pipeline.tracker import TrackFrame, _clip_bbox_with_padding
 
 
@@ -50,14 +52,20 @@ class CropPoseExtractor:
         model_path: str = MP_POSE_MODEL,
         min_detection_confidence: float = MP_MIN_DETECTION_CONFIDENCE,
         min_tracking_confidence: float = MP_MIN_TRACKING_CONFIDENCE,
+        device: str | None = None,
     ) -> None:
+        delegate = resolve_mediapipe_delegate(
+            device if device is not None else EXTRACTION_DEVICE_DEFAULT
+        )
         self._landmarker = VideoPoseLandmarker(
             model_path,
             download_url=POSE_LANDMARKER_HEAVY_URL,
             min_pose_detection_confidence=min_detection_confidence,
             min_pose_presence_confidence=min_detection_confidence,
             min_tracking_confidence=min_tracking_confidence,
+            delegate=delegate,
         )
+        self.mediapipe_delegate = self._landmarker.active_delegate
 
     def close(self) -> None:
         self._landmarker.close()

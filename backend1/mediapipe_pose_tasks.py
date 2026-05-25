@@ -137,6 +137,19 @@ def landmarks_dict_from_list(landmark_list) -> Dict[str, dict]:
     return out
 
 
+def _delegate_candidates(delegate: str) -> list:
+    from mediapipe.tasks.python.core import base_options as base_options_lib
+
+    Delegate = base_options_lib.BaseOptions.Delegate
+    mode = (delegate or "auto").strip().lower()
+    if mode == "cpu":
+        return [Delegate.CPU]
+    if mode in ("gpu", "cuda"):
+        return [Delegate.GPU, Delegate.CPU]
+    # auto: GPU 우선
+    return [Delegate.GPU, Delegate.CPU]
+
+
 class VideoPoseLandmarker:
     """PoseLandmarker — RunningMode.VIDEO (연속 프레임 timestamp_ms 필요)."""
 
@@ -148,6 +161,7 @@ class VideoPoseLandmarker:
         min_pose_detection_confidence: float = 0.5,
         min_pose_presence_confidence: float = 0.5,
         min_tracking_confidence: float = 0.5,
+        delegate: str = "auto",
     ) -> None:
         assert_mediapipe_tasks_compatible()
         import mediapipe as mp
@@ -155,17 +169,44 @@ class VideoPoseLandmarker:
         from mediapipe.tasks.python.core import base_options as base_options_lib
 
         resolved = ensure_pose_model(model_path, download_url)
-        base_options = base_options_lib.BaseOptions(model_asset_path=str(resolved))
-        options = vision.PoseLandmarkerOptions(
-            base_options=base_options,
-            running_mode=vision.RunningMode.VIDEO,
-            num_poses=1,
-            min_pose_detection_confidence=min_pose_detection_confidence,
-            min_pose_presence_confidence=min_pose_presence_confidence,
-            min_tracking_confidence=min_tracking_confidence,
-        )
+        last_err: Optional[BaseException] = None
+        landmarker = None
+        active_delegate = "cpu"
+
+        for delgate_enum in _delegate_candidates(delegate):
+            try:
+                base_options = base_options_lib.BaseOptions(
+                    model_asset_path=str(resolved),
+                    delegate=delgate_enum,
+                )
+                options = vision.PoseLandmarkerOptions(
+                    base_options=base_options,
+                    running_mode=vision.RunningMode.VIDEO,
+                    num_poses=1,
+                    min_pose_detection_confidence=min_pose_detection_confidence,
+                    min_pose_presence_confidence=min_pose_presence_confidence,
+                    min_tracking_confidence=min_tracking_confidence,
+                )
+                landmarker = vision.PoseLandmarker.create_from_options(options)
+                active_delegate = (
+                    "gpu"
+                    if delgate_enum == base_options_lib.BaseOptions.Delegate.GPU
+                    else "cpu"
+                )
+                break
+            except Exception as e:
+                last_err = e
+                continue
+
+        if landmarker is None:
+            raise RuntimeError(
+                f"PoseLandmarker 생성 실패 (delegate={delegate!r}). "
+                f"pip install mediapipe>=0.10.31 확인."
+            ) from last_err
+
         self._mp = mp
-        self._landmarker = vision.PoseLandmarker.create_from_options(options)
+        self._landmarker = landmarker
+        self.active_delegate = active_delegate
 
     def close(self) -> None:
         self._landmarker.close()

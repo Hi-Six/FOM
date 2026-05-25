@@ -14,11 +14,13 @@ import cv2
 import numpy as np
 
 from metrics.isolation.config import (
+    EXTRACTION_DEVICE_DEFAULT,
     YOLO_CONF,
     YOLO_IOU,
     YOLO_MODEL,
     YOLO_PERSON_CLASS,
 )
+from metrics.isolation.device import resolve_yolo_device
 
 
 def _ensure_tracking_deps() -> None:
@@ -135,7 +137,9 @@ class PersonTracker:
         self.conf = conf
         self.iou = iou
         self.padding_ratio = padding_ratio
-        self.device = device
+        self.device = resolve_yolo_device(
+            device if device is not None else EXTRACTION_DEVICE_DEFAULT
+        )
         self.vid_stride = max(1, int(vid_stride))
 
     def iter_frames(self, video_path: str | Path) -> Iterator[TrackFrame]:
@@ -159,8 +163,7 @@ class PersonTracker:
             "verbose": False,
             "vid_stride": self.vid_stride,
         }
-        if self.device:
-            track_kwargs["device"] = self.device
+        track_kwargs["device"] = self.device
 
         last_bbox: Optional[Tuple[int, int, int, int]] = None
         last_tid: Optional[int] = None

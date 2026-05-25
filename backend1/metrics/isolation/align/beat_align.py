@@ -152,11 +152,14 @@ def align_extractions_beat(
         cache_path=ref_cache,
         video_override=ref_video_path or DEFAULT_REF_VIDEO,
     )
+    # ref BPM을 hint로 전달 → 같은 곡일 때 user BPM이 ref와 일치할 확률이 높아진다
+    ref_bpm_hint = float(ref_beat_data.get("bpm") or 0.0) or None
     user_cache = Path(save_user_beats_to) if save_user_beats_to else None
     user_beat_data = beats_for_extraction(
         user_data,
         cache_path=user_cache,
         video_override=user_video_path,
+        bpm_hint=ref_bpm_hint,
     )
 
     ref_music_start = (
@@ -237,19 +240,13 @@ def align_extractions_beat(
         )
 
     dup_ratio = compute_duplicate_ratio(pairs)
+    # beat 정렬은 비트 내 여러 user 프레임이 같은 ref 프레임에 묶이므로
+    # duplicate_ref_ratio가 구조적으로 높다 → 중복 경고 대신 BPM 경고만 사용
     warning = None
-    if dup_ratio > DUPLICATE_RATIO_WARN_THRESHOLD:
-        warning = (
-            f"레퍼런스 프레임 중복 매칭 {int(dup_ratio * 100)}%. "
-            "곡/템포 차이 또는 beat_lag 조정이 필요할 수 있습니다."
-        )
     ref_bpm = float(ref_beat_data.get("bpm") or 0)
     user_bpm = float(user_beat_data.get("bpm") or 0)
     if ref_bpm and user_bpm and abs(ref_bpm - user_bpm) > 8:
-        tempo_warn = (
-            f"BPM 차이: ref≈{ref_bpm} user≈{user_bpm}. 같은 곡인지 확인하세요."
-        )
-        warning = f"{warning} {tempo_warn}" if warning else tempo_warn
+        warning = f"BPM 차이: ref≈{ref_bpm} user≈{user_bpm}. 같은 곡인지 확인하세요."
 
     return {
         "alignment": {

@@ -16,7 +16,13 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from metrics.isolation.config import CROP_PADDING_RATIO, DATA_ARTIFACTS, MP_SMOOTH_WINDOW
+from metrics.isolation.config import (
+    CROP_PADDING_RATIO,
+    DATA_ARTIFACTS,
+    EXTRACTION_DEVICE_DEFAULT,
+    MP_SMOOTH_WINDOW,
+)
+from metrics.isolation.device import resolve_extraction_devices
 from metrics.isolation.pipeline.geometry import compute_bone_vectors, compute_joint_angles
 from mediapipe_pose_tasks import frame_timestamp_ms
 from metrics.isolation.pipeline.pose_extract import (
@@ -122,6 +128,7 @@ def extract_from_video(
     tracks_json_path: Optional[str | Path] = None,
     reuse_yolo: bool = True,
     progress_every: int = 50,
+    device: str | None = None,
     **tracker_kw: Any,
 ) -> dict:
     """
@@ -132,6 +139,14 @@ def extract_from_video(
     path = Path(video_path)
     if not path.is_file():
         raise FileNotFoundError(f"영상 없음: {path}")
+
+    dev_in = device
+    if dev_in is None:
+        dev_in = tracker_kw.get("device")
+    if dev_in is None:
+        dev_in = EXTRACTION_DEVICE_DEFAULT
+    yolo_dev, mp_delegate, dev_label = resolve_extraction_devices(dev_in)
+    tracker_kw["device"] = yolo_dev
 
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
@@ -171,7 +186,11 @@ def extract_from_video(
     track_indices = sorted(tracks_by_frame.keys())
     n_track = len(track_indices)
 
-    with CropPoseExtractor() as pose:
+    print(f"  extraction device: {dev_label} (yolo={yolo_dev}, mediapipe={mp_delegate})")
+
+    mediapipe_active = mp_delegate
+    with CropPoseExtractor(device=dev_in) as pose:
+        mediapipe_active = pose.mediapipe_delegate
         for processed, frame_index in enumerate(track_indices, start=1):
             cap.set(cv2.CAP_PROP_POS_FRAMES, frame_index)
             ret, frame = cap.read()
@@ -220,6 +239,11 @@ def extract_from_video(
         "metric": "isolation",
         "pipeline": "yolo11_track+crop_mediapipe_tasks_heavy",
         "crop_padding_ratio": CROP_PADDING_RATIO,
+        "extraction_device": {
+            "label": dev_label,
+            "yolo": str(yolo_dev),
+            "mediapipe_delegate": mediapipe_active,
+        },
         "fps": fps,
         "total_frames": len(frames_output),
         "frames": frames_output,

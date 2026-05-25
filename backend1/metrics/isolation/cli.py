@@ -19,12 +19,14 @@ from metrics.isolation.config import (
     DATA_ARTIFACTS,
     DATA_RAW,
     DEFAULT_ALIGNMENT_METHOD,
+    EXTRACTION_DEVICE_DEFAULT,
     REF_COMPARE_DURATION_SEC,
     REF_VIDEO_NAME,
     USER_VIDEO_NAME,
     USER_VIDEO_URL,
     YOLO_MODEL,
 )
+from metrics.isolation.device import resolve_extraction_devices
 from metrics.isolation.pipeline.extract import extract_and_save
 from metrics.isolation.pipeline.io import save_json
 from metrics.isolation.pipeline.tracker import PersonTracker
@@ -85,7 +87,10 @@ def cmd_track(args: argparse.Namespace) -> None:
         print(str(e), file=sys.stderr)
         sys.exit(1)
 
-    print(f"tracking: {video} (stride={args.vid_stride}, device={args.device or 'auto'})")
+    _, _, dev_label = resolve_extraction_devices(args.device)
+    print(
+        f"tracking: {video} (stride={args.vid_stride}, device={dev_label})"
+    )
     frames = tracker.track_all(video)
     print(f"video: {video}")
     print(f"tracked frames: {len(frames)}")
@@ -130,7 +135,8 @@ def cmd_extract(args: argparse.Namespace) -> None:
         print(f"tracks JSON 없음: {tracks_path}", file=sys.stderr)
         sys.exit(1)
 
-    print(f"extract: {video}")
+    _, _, dev_label = resolve_extraction_devices(args.device)
+    print(f"extract: {video} (device={dev_label})")
     if tracks_path:
         print(f"  tracks: {tracks_path} (YOLO 생략)")
     elif args.no_tracks_cache:
@@ -372,6 +378,38 @@ def cmd_verify(args: argparse.Namespace) -> None:
         )
 
 
+def cmd_viz(args: argparse.Namespace) -> None:
+    """ref/user 분할 화면 영상 생성."""
+    from metrics.isolation.scripts.visualize import render_isolation_split
+
+    for label, p in [("ref-video",  args.ref_video),
+                     ("user-video", args.user_video),
+                     ("ref-json",   args.ref_json),
+                     ("user-json",  args.user_json)]:
+        if not Path(p).is_file():
+            print(f"없음 ({label}): {p}", file=sys.stderr)
+            sys.exit(1)
+
+    pairs_path = args.pairs if Path(args.pairs).is_file() else None
+    if not pairs_path:
+        print("  aligned_pairs.json 없음 → 자동 정렬 실행", file=sys.stderr)
+
+    print(f"viz: {args.user_video.name} ↔ {args.ref_video.name}")
+    out = render_isolation_split(
+        ref_video=args.ref_video,
+        user_video=args.user_video,
+        ref_json_path=args.ref_json,
+        user_json_path=args.user_json,
+        output_path=args.out,
+        aligned_pairs_path=pairs_path,
+        panel_width=args.panel_width,
+        crf=args.crf,
+        encode_preset=args.encode_preset,
+        encode_device=args.encode_device,
+    )
+    print(f"  saved: {out.resolve()}")
+
+
 def cmd_run(args: argparse.Namespace) -> None:
     """user mp4 → (tracks) → extract → align → score 한 번에."""
     jout = args.json
@@ -457,7 +495,11 @@ def main() -> None:
     p_tr.add_argument("--video", type=Path, default=DATA_RAW / REF_VIDEO_NAME)
     p_tr.add_argument("--model", default=YOLO_MODEL)
     p_tr.add_argument("--padding", type=float, default=0.0)
-    p_tr.add_argument("--device", default=None)
+    p_tr.add_argument(
+        "--device",
+        default=EXTRACTION_DEVICE_DEFAULT,
+        help="auto=GPU(CUDA) 우선 | cpu | 0 | cuda:0 (YOLO+MediaPipe)",
+    )
     p_tr.add_argument("--vid-stride", type=int, default=1)
     p_tr.add_argument("--out", type=Path, default=None)
     p_tr.set_defaults(func=cmd_track)
@@ -467,7 +509,11 @@ def main() -> None:
     p_ex.add_argument("--out", type=Path, default=DATA_ARTIFACTS / "ref.json")
     p_ex.add_argument("--tracks", type=Path, default=None)
     p_ex.add_argument("--no-tracks-cache", action="store_true")
-    p_ex.add_argument("--device", default=None)
+    p_ex.add_argument(
+        "--device",
+        default=EXTRACTION_DEVICE_DEFAULT,
+        help="auto=GPU(CUDA) 우선 | cpu | 0 | cuda:0 (YOLO+MediaPipe)",
+    )
     p_ex.add_argument("--progress-every", type=int, default=50)
     p_ex.set_defaults(func=cmd_extract)
 
@@ -542,7 +588,11 @@ def main() -> None:
     p_run.add_argument("--aligned-out", type=Path, default=DATA_ARTIFACTS / "aligned_pairs.json")
     p_run.add_argument("--score-out", type=Path, default=DATA_ARTIFACTS / "isolation_score.json")
     p_run.add_argument("--skip-extract", action="store_true")
-    p_run.add_argument("--device", default=None)
+    p_run.add_argument(
+        "--device",
+        default=EXTRACTION_DEVICE_DEFAULT,
+        help="auto=GPU(CUDA) 우선 | cpu | 0 | cuda:0 (YOLO+MediaPipe)",
+    )
     p_run.add_argument("--progress-every", type=int, default=50)
     p_run.add_argument(
         "--json",
@@ -583,10 +633,62 @@ def main() -> None:
     )
     p_vf.add_argument("--out", type=Path, default=None, help="리포트 JSON 저장")
     p_vf.add_argument("--json", action="store_true", help="리포트 전체를 stdout JSON")
-    p_vf.add_argument("--device", default=None)
+    p_vf.add_argument(
+        "--device",
+        default=EXTRACTION_DEVICE_DEFAULT,
+        help="auto=GPU(CUDA) 우선 | cpu | 0 | cuda:0 (YOLO+MediaPipe)",
+    )
     p_vf.add_argument("--progress-every", type=int, default=50)
     _add_align_flags(p_vf)
     p_vf.set_defaults(func=cmd_verify)
+
+    p_viz = sub.add_parser(
+        "viz",
+        help="ref/user 분할 화면 영상 생성 (스켈레톤 + isolation region 색상)",
+    )
+    p_viz.add_argument("--ref-video",  type=Path, default=DATA_RAW / REF_VIDEO_NAME)
+    p_viz.add_argument("--user-video", type=Path, default=DATA_RAW / USER_VIDEO_NAME)
+    p_viz.add_argument("--ref-json",   type=Path, default=DATA_ARTIFACTS / "ref.json")
+    p_viz.add_argument("--user-json",  type=Path, default=DATA_ARTIFACTS / "user.json")
+    p_viz.add_argument(
+        "--pairs",
+        type=Path,
+        default=DATA_ARTIFACTS / "aligned_pairs.json",
+        help="aligned_pairs.json (없으면 자동 정렬)",
+    )
+    p_viz.add_argument(
+        "--out",
+        type=Path,
+        default=DATA_ARTIFACTS / "viz_split.mp4",
+        help="출력 영상 경로",
+    )
+    p_viz.add_argument(
+        "--panel-width",
+        type=int,
+        default=None,
+        help="각 패널 가로 픽셀 (기본: user 영상 원본 너비). 작게 줄이면 화질 저하",
+    )
+    p_viz.add_argument(
+        "--crf",
+        type=int,
+        default=17,
+        help="H.264 품질 (0=최고, 23=기본, 51=최저). 기본 17",
+    )
+    p_viz.add_argument(
+        "--encode-preset",
+        type=str,
+        default="medium",
+        choices=("ultrafast", "fast", "medium", "slow", "veryslow"),
+        help="인코딩 preset (CPU=libx264, GPU NVENC=p1~p7 매핑)",
+    )
+    p_viz.add_argument(
+        "--encode-device",
+        type=str,
+        default="auto",
+        choices=("auto", "cpu", "nvenc", "amf", "qsv"),
+        help="auto=GPU 우선(nvenc→amf→qsv), 없으면 CPU",
+    )
+    p_viz.set_defaults(func=cmd_viz)
 
     args = parser.parse_args()
     args.func(args)

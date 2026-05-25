@@ -12,7 +12,7 @@ REF_VIDEO_URL = "https://www.youtube.com/shorts/YzTywjy0VXU"
 REF_VIDEO_NAME = "ref.mp4"
 
 # 사용자 비교용 (Shorts — 용량·다운로드 안정)
-USER_VIDEO_URL = "https://www.youtube.com/shorts/9kLf88IksZU"
+USER_VIDEO_URL = "https://www.youtube.com/shorts/M4LVrGo9uEQ"
 USER_VIDEO_NAME = "user.mp4"
 
 # 기준(ref) 영상 — 앞 N초만 user 와 비교 (Shorts 앞 구간)
@@ -39,3 +39,6 @@ DEFAULT_ALIGNMENT_METHOD = "beat"
 
 # 비교·박자 축: 영상 0초가 아니라 오디오에서 음악이 시작되는 시각
 ALIGN_TO_MUSIC_START = True
+
+# 추출(YOLO + MediaPipe): auto = CUDA 있으면 GPU, 없으면 CPU
+EXTRACTION_DEVICE_DEFAULT = "auto"
