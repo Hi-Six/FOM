@@ -88,12 +88,13 @@ AI 비전 기술을 활용해 전문가 영상과 사용자 동작을 다차원�
 │   (backend1)    │
 └────────┬────────┘
          │
-    ┌────┴────────────────────┐
-    ▼                         ▼
-┌─────────┐           ┌──────────────┐
-│MediaPipe│           │ LLM (Ollama) │
-│ Pose    │           │ Qwen 2.5     │
-└─────────┘           └──────────────┘
+    ┌────┴──────────────┬─────────────────┐
+    ▼                   ▼                 ▼
+┌─────────┐     ┌──────────┐    ┌──────────────┐
+│MediaPipe│     │  YOLO11  │    │ LLM (Ollama) │
+│ Pose    │     │ Isolation│    │ Qwen 2.5     │
+│ ROM 등  │     │   추적   │    │ 피드백 생성  │
+└─────────┘     └──────────┘    └──────────────┘
 ```
 
 ### Hub-Spoke 패턴
@@ -119,22 +120,39 @@ backend1/
                 └── models/     ← 데이터 스키마
 ```
 
+### Isolation · Accuracy 도메인
+
+| 도메인 | 경로 | 역할 |
+|--------|------|------|
+| **Isolation** (아이솔) | `metrics/isolation/` | YOLO11 트래킹·부위별 독립성. 통합 analyze 기본은 ROM `aligned_pairs`로 `score_isolation` 채점. `pipelines`에 `isolation` 명시 시 YOLO sidecar(`{base}_isolation.json`) 추출 |
+| **Accuracy** (정확성) | `metrics/rom/domain/domain1/hub/services/scoring/accuracy_scorer.py` | 전문가 대비 포즈 유사도. 오케스트레이터가 ROM 정렬 쌍(`aligned_pairs`)을 넘겨 `score_accuracy` 호출 |
+
+두 metric 모두 **별도 HTTP 라우터 없이** 통합 `/video/analyze` 오케스트레이터 경로로 채점됩니다. Isolation 전용 API는 `POST /isolation/*` (`metrics/isolation/router.py`).
+
 ### 데이터 플로우
 
 ```mermaid
 flowchart TB
     User[사용자] -->|영상 업로드| API[FastAPI Router]
     API -->|Phase A| EC[extract_coordinator]
-    EC -->|병렬 추출| ROM[ROM]
+    EC -->|병렬 추출| ROM[ROM · MediaPipe]
     EC -->|병렬 추출| Rhythm[Rhythm]
     EC -->|병렬 추출| Power[Power]
     EC -->|병렬 추출| Creativity[Creativity]
-    ROM --> JSON[(표준 JSON)]
-    Rhythm --> JSON
-    Power --> JSON
-    Creativity --> JSON
+    EC -.->|선택 YOLO| IsoExt[Isolation 추출]
+    ROM --> JSON[(canonical JSON)]
+    Rhythm --> Sidecar[(sidecar JSON)]
+    Power --> Sidecar
+    Creativity --> Sidecar
+    IsoExt -.-> IsoJSON[(isolation JSON)]
     JSON -->|Phase B| Orch[orchestrator]
-    Orch -->|병렬 채점| Score[6차원 점수]
+    Orch --> Align[aligned_pairs]
+    Align --> Acc[Accuracy]
+    Align --> Iso[Isolation]
+    Orch -->|병렬 채점| Other[ROM·Rhythm·Power·Creativity]
+    Acc --> Score[6차원 점수]
+    Iso --> Score
+    Other --> Score
     Score --> LLM[LLM Service]
     LLM --> Result[종합 피드백]
     Result --> User
