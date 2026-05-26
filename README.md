@@ -129,37 +129,6 @@ backend1/
 
 두 metric 모두 **별도 HTTP 라우터 없이** 통합 `/video/analyze` 오케스트레이터 경로로 채점됩니다. Isolation 전용 API는 `POST /isolation/*` (`metrics/isolation/router.py`).
 
-### 데이터 플로우
-
-```mermaid
-flowchart TB
-    User[사용자] -->|영상 업로드| API[FastAPI Router]
-    API -->|Phase A| EC[extract_coordinator]
-    EC -->|병렬 추출| ROM[ROM · MediaPipe]
-    EC -->|병렬 추출| Rhythm[Rhythm]
-    EC -->|병렬 추출| Power[Power]
-    EC -->|병렬 추출| Creativity[Creativity]
-    EC -.->|선택 YOLO| IsoExt[Isolation 추출]
-    ROM --> JSON[(canonical JSON)]
-    Rhythm --> Sidecar[(sidecar JSON)]
-    Power --> Sidecar
-    Creativity --> Sidecar
-    IsoExt -.-> IsoJSON[(isolation JSON)]
-    JSON -->|Phase B| Orch[orchestrator]
-    Orch --> Align[aligned_pairs]
-    Align --> Acc[Accuracy]
-    Align --> Iso[Isolation]
-    Orch -->|병렬 채점| Other[ROM·Rhythm·Power·Creativity]
-    Acc --> Score[6차원 점수]
-    Iso --> Score
-    Other --> Score
-    Score --> LLM[LLM Service]
-    LLM --> Result[종합 피드백]
-    Result --> User
-```
-
----
-
 ## 🛠 기술 스택
 
 ### Backend (backend1/)
