@@ -1,5 +1,5 @@
 """
-분할 화면 비교 결과 영상 — 좌=기준, 우=관절별 실시간 창의성 + 강조.
+분할 화면 비교 결과 영상 — 패널당 스켈레톤 1개 오버레이.
 """
 
 from __future__ import annotations
@@ -12,11 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from .joint_live_viz import (
-    DISPLAY_JOINTS,
-    JointScoreSmoother,
-    analyze_frame_joints,
-)
+from .joint_live_viz import DISPLAY_JOINTS
 
 _SKELETON_EDGES = (
     ("left_shoulder", "right_shoulder"),
@@ -33,24 +29,15 @@ _SKELETON_EDGES = (
     ("right_knee", "right_ankle"),
 )
 
-# BGR — 사람 위에 선명하게 덮는 고채도 색
-_COLOR_OUTLINE = (0, 0, 0)
-_COLOR_REF_LINE = (0, 255, 255)       # 시안
-_COLOR_REF_JOINT = (255, 255, 0)      # 노랑
-_COLOR_RIGHT_SKEL = (255, 0, 255)     # 마젠타
-_COLOR_HIGH = (0, 255, 0)             # 라임 (강조)
-_COLOR_HIGH_RING = (0, 255, 128)
-_COLOR_LOW = (255, 80, 180)           # 핑크
-_COLOR_MID = (0, 165, 255)            # 오렌지
-_COLOR_TEXT = (255, 255, 255)
-_COLOR_BOX = (40, 20, 60)
-
-_LINE_REF = 4
-_LINE_SCORE = 5
-_LINE_SCORE_HI = 7
-_JOINT_REF = 8
-_JOINT_SCORE = 10
-_JOINT_SCORE_HI = 14
+_DEFAULT_LEFT_LABEL = "Reference"
+_DEFAULT_RIGHT_LABEL = "Compare"
+# BGR — 화면 왼쪽=파란, 오른쪽=빨강, 매칭 구간=노랑
+_COLOR_PANEL_LEFT = (255, 0, 0)
+_COLOR_PANEL_RIGHT = (0, 0, 255)
+_COLOR_MATCHED = (0, 255, 255)
+_LINE_THICKNESS = 2
+_JOINT_RADIUS = 3
+_SPLIT_LINE = (200, 200, 200)
 
 
 def _resolve_ffmpeg() -> str | None:
@@ -95,6 +82,52 @@ def _attach_audio(silent_path: Path, source_video: str, out_path: Path) -> None:
         shutil.copy2(silent_path, out_path)
 
 
+def _motion_from_analysis(analysis: dict[str, Any]) -> dict[str, Any] | None:
+    motion = analysis.get("motion")
+    if motion:
+        return motion
+    creativity = analysis.get("creativity") or {}
+    return creativity.get("motion")
+
+
+def _matched_ref_intervals(analysis: dict[str, Any]) -> list[tuple[float, float]]:
+    """양끝 경계가 user와 매칭된 ref 구간 [start, end] (초)."""
+    motion = _motion_from_analysis(analysis)
+    if not motion:
+        return []
+    out: list[tuple[float, float]] = []
+    for seg in motion.get("segments") or []:
+        if seg.get("skipped"):
+            continue
+        if not (seg.get("start_matched") and seg.get("end_matched")):
+            continue
+        rw = seg.get("ref_window_sec") or []
+        if len(rw) >= 2:
+            out.append((float(rw[0]), float(rw[1])))
+    return out
+
+
+def _time_in_matched_intervals(
+    t: float, intervals: list[tuple[float, float]], *, margin_sec: float = 0.02
+) -> bool:
+    for lo, hi in intervals:
+        if lo - margin_sec <= t <= hi + margin_sec:
+            return True
+    return False
+
+
+def _frame_time_sec(
+    user_fr: dict[str, Any] | None,
+    ref_fr: dict[str, Any] | None,
+    frame_index: int,
+    fps: float,
+) -> float:
+    for fr in (user_fr, ref_fr):
+        if fr and fr.get("time_sec") is not None:
+            return float(fr["time_sec"])
+    return float(frame_index) / fps if fps > 0 else float(frame_index)
+
+
 def _frames_by_source(frames: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
     out: dict[int, dict[str, Any]] = {}
     for fr in frames:
@@ -103,81 +136,31 @@ def _frames_by_source(frames: list[dict[str, Any]]) -> dict[int, dict[str, Any]]
     return out
 
 
-def _joint_color(score: float, highlight: bool) -> tuple[int, int, int]:
-    if highlight:
-        return _COLOR_HIGH
-    if score >= 70:
-        return (0, 255, 128)
-    if score >= 45:
-        return _COLOR_MID
-    return _COLOR_LOW
+def _panel_region(
+    panel: str,
+    split_x: int,
+    frame_w: int,
+    frame_h: int,
+) -> tuple[int, int, int, int]:
+    """물리 패널(left|right) → (x0, y0, pw, ph). landmarks는 해당 crop 기준 0~1."""
+    if panel == "left":
+        return 0, 0, split_x, frame_h
+    return split_x, 0, frame_w - split_x, frame_h
 
 
-def _stroke_line(
-    img: np.ndarray,
-    p1: tuple[int, int],
-    p2: tuple[int, int],
-    color: tuple[int, int, int],
-    thickness: int,
-) -> None:
-    import cv2
-
-    outline = thickness + 3
-    cv2.line(img, p1, p2, _COLOR_OUTLINE, outline, cv2.LINE_AA)
-    cv2.line(img, p1, p2, color, thickness, cv2.LINE_AA)
-
-
-def _stroke_circle(
-    img: np.ndarray,
-    center: tuple[int, int],
-    radius: int,
-    color: tuple[int, int, int],
-    *,
-    ring: tuple[int, int, int] | None = None,
-) -> None:
-    import cv2
-
-    if ring is not None:
-        cv2.circle(img, center, radius + 5, _COLOR_OUTLINE, 4, cv2.LINE_AA)
-        cv2.circle(img, center, radius + 4, ring, 3, cv2.LINE_AA)
-    cv2.circle(img, center, radius + 2, _COLOR_OUTLINE, -1, cv2.LINE_AA)
-    cv2.circle(img, center, radius, color, -1, cv2.LINE_AA)
-    cv2.circle(img, center, radius + 1, (255, 255, 255), 1, cv2.LINE_AA)
-
-
-def _draw_score_text(
-    img: np.ndarray,
-    text: str,
-    pos: tuple[int, int],
-    color: tuple[int, int, int],
-    *,
-    large: bool = False,
-) -> None:
-    import cv2
-
-    scale = 0.72 if large else 0.58
-    thick_fg = 2 if large else 2
-    thick_bg = 5 if large else 4
-    cv2.putText(
-        img,
-        text,
-        pos,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        scale,
-        _COLOR_OUTLINE,
-        thick_bg,
-        cv2.LINE_AA,
-    )
-    cv2.putText(
-        img,
-        text,
-        pos,
-        cv2.FONT_HERSHEY_SIMPLEX,
-        scale,
-        color,
-        thick_fg,
-        cv2.LINE_AA,
-    )
+def _detection_region(
+    x0: int,
+    y0: int,
+    pw: int,
+    ph: int,
+    center_crop_ratio: float | None,
+) -> tuple[int, int, int, int]:
+    """패널 내 포즈 검출에 쓴 영역 (중앙 crop 포함) → (x0, y0, w, h)."""
+    if center_crop_ratio is None or not (0.0 < center_crop_ratio < 1.0):
+        return x0, y0, pw, ph
+    cw = max(32, int(pw * center_crop_ratio))
+    ch = max(32, int(ph * center_crop_ratio))
+    return x0 + (pw - cw) // 2, y0 + (ph - ch) // 2, cw, ch
 
 
 def _landmark_px(
@@ -186,136 +169,85 @@ def _landmark_px(
     y0: int,
     pw: int,
     ph: int,
+    *,
+    center_crop_ratio: float | None = None,
 ) -> tuple[int, int] | None:
-    px = int(x0 + float(lm["x"]) * pw)
-    py = int(y0 + float(lm["y"]) * ph)
+    # MediaPipe: x,y ∈ [0,1] — 검출에 넣은 이미지(패널 또는 패널 내 중앙 crop) 기준
+    dx, dy, dw, dh = _detection_region(x0, y0, pw, ph, center_crop_ratio)
+    px = int(dx + float(lm["x"]) * dw)
+    py = int(dy + float(lm["y"]) * dh)
     return px, py
 
 
-def _draw_ref_skeleton(
-    img: np.ndarray,
+def _collect_points(
     landmarks: dict[str, dict],
     x0: int,
     y0: int,
     pw: int,
     ph: int,
+    img_w: int,
+    img_h: int,
+    *,
+    center_crop_ratio: float | None = None,
 ) -> dict[str, tuple[int, int]]:
-    import cv2
-
     pts: dict[str, tuple[int, int]] = {}
     for name, _ in DISPLAY_JOINTS:
         lm = landmarks.get(name)
         if not lm or float(lm.get("visibility", 1)) < 0.35:
             continue
-        p = _landmark_px(lm, x0, y0, pw, ph)
-        if p and 0 <= p[0] < img.shape[1] and 0 <= p[1] < img.shape[0]:
+        p = _landmark_px(
+            lm, x0, y0, pw, ph, center_crop_ratio=center_crop_ratio
+        )
+        if p and 0 <= p[0] < img_w and 0 <= p[1] < img_h:
             pts[name] = p
-
-    for a, b in _SKELETON_EDGES:
-        if a in pts and b in pts:
-            _stroke_line(img, pts[a], pts[b], _COLOR_REF_LINE, _LINE_REF)
-    for p in pts.values():
-        _stroke_circle(img, p, _JOINT_REF, _COLOR_REF_JOINT)
     return pts
 
 
-def _draw_scored_skeleton(
+def _draw_skeleton(
     img: np.ndarray,
     landmarks: dict[str, dict],
-    joint_info: list[dict[str, Any]],
     x0: int,
     y0: int,
     pw: int,
     ph: int,
+    color: tuple[int, int, int],
+    *,
+    center_crop_ratio: float | None = None,
 ) -> None:
+    """패널 위 사람 1명 — 단색 선·작은 관절점만 (테두리·점수 없음)."""
     import cv2
 
-    score_by_name = {
-        j["joint"]: j for j in joint_info if j.get("joint") and not j.get("skipped")
-    }
-    pts: dict[str, tuple[int, int]] = {}
-    for name, _ in DISPLAY_JOINTS:
-        lm = landmarks.get(name)
-        if not lm or float(lm.get("visibility", 1)) < 0.35:
-            continue
-        p = _landmark_px(lm, x0, y0, pw, ph)
-        if p and 0 <= p[0] < img.shape[1] and 0 <= p[1] < img.shape[0]:
-            pts[name] = p
+    h, w = img.shape[:2]
+    pts = _collect_points(
+        landmarks, x0, y0, pw, ph, w, h, center_crop_ratio=center_crop_ratio
+    )
 
     for a, b in _SKELETON_EDGES:
-        if a not in pts or b not in pts:
-            continue
-        ja = score_by_name.get(a, {})
-        jb = score_by_name.get(b, {})
-        sa = float(ja.get("creativity_score") or 0)
-        sb = float(jb.get("creativity_score") or 0)
-        ha = ja.get("highlight") or sa >= 62
-        hb = jb.get("highlight") or sb >= 62
-        col = _COLOR_HIGH if (ha or hb) else _COLOR_RIGHT_SKEL
-        thick = _LINE_SCORE_HI if (ha and hb) else (_LINE_SCORE if (ha or hb) else _LINE_SCORE - 1)
-        _stroke_line(img, pts[a], pts[b], col, thick)
-
-    for name, p in pts.items():
-        ji = score_by_name.get(name, {})
-        sc = float(ji.get("creativity_score") or 0)
-        hi = bool(ji.get("highlight"))
-        col = _joint_color(sc, hi)
-        radius = _JOINT_SCORE_HI if hi else _JOINT_SCORE
-        ring = _COLOR_HIGH_RING if hi else None
-        _stroke_circle(img, p, radius, col, ring=ring)
-
-        txt = f"{sc:.0f}"
-        tx = min(p[0] + 10, img.shape[1] - 48)
-        ty = max(p[1] - 8, 20)
-        _draw_score_text(img, txt, (tx, ty), col, large=hi)
+        if a in pts and b in pts:
+            cv2.line(img, pts[a], pts[b], color, _LINE_THICKNESS, cv2.LINE_AA)
+    for p in pts.values():
+        cv2.circle(img, p, _JOINT_RADIUS, color, -1, cv2.LINE_AA)
 
 
-def _draw_panel_header(
+def _draw_label(
     img: np.ndarray,
     x: int,
     y: int,
-    w: int,
-    title: str,
-    sub: str,
-    *,
-    accent: tuple[int, int, int],
+    text: str,
+    color: tuple[int, int, int],
 ) -> None:
     import cv2
 
-    overlay = img.copy()
-    cv2.rectangle(overlay, (x, y), (x + w, y + 44), (20, 20, 20), -1)
-    cv2.addWeighted(overlay, 0.55, img, 0.45, 0, img)
-    _draw_score_text(img, title, (x + 10, y + 26), accent, large=True)
-    if sub:
-        _draw_score_text(img, sub, (x + 10, y + 42), _COLOR_TEXT)
-
-
-def _draw_bottom_panel(
-    img: np.ndarray,
-    x: int,
-    y: int,
-    w: int,
-    lines: list[str],
-    *,
-    accent: tuple[int, int, int],
-) -> None:
-    import cv2
-
-    h = 28 + 22 * len(lines)
-    overlay = img.copy()
-    cv2.rectangle(overlay, (x, y), (x + w, y + h), _COLOR_BOX, -1)
-    cv2.addWeighted(overlay, 0.5, img, 0.5, 0, img)
-    ty = y + 22
-    for i, line in enumerate(lines):
-        col = accent if i == 0 else _COLOR_TEXT
-        _draw_score_text(
-            img,
-            line,
-            (x + 10, ty),
-            col,
-            large=(i == 0),
-        )
-        ty += 22
+    cv2.putText(
+        img,
+        text,
+        (x, y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
 
 
 def render_split_screen_video(
@@ -326,17 +258,28 @@ def render_split_screen_video(
     output_path: str | Path,
     *,
     split_meta: dict[str, Any],
-    left_label: str = "기준",
-    right_label: str = "창의성",
+    left_label: str = _DEFAULT_LEFT_LABEL,
+    right_label: str = _DEFAULT_RIGHT_LABEL,
 ) -> Path:
     """
-    좌측=레퍼런스(기준), 우측=비교 대상 — 매 프레임 대표 관절 창의성 수치·고득점 강조.
+    물리 좌/우 패널 각각 — 추출 crop 좌표에 맞춰 스켈레톤 오버레이.
+    기본: 왼쪽=파란, 오른쪽=빨강. 양끝 매칭된 ref 구간에서는 양쪽 모두 노랑.
     """
     import cv2
+
+    matched_intervals = _matched_ref_intervals(analysis)
 
     path = Path(video_path)
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
+
+    left_tag = (left_label or _DEFAULT_LEFT_LABEL).strip() or _DEFAULT_LEFT_LABEL
+    right_tag = (right_label or _DEFAULT_RIGHT_LABEL).strip() or _DEFAULT_RIGHT_LABEL
+    # OpenCV 기본 폰트는 ASCII만 안정적 — 한글 등은 깨지므로 ASCII 기본값 사용
+    if not left_tag.isascii():
+        left_tag = _DEFAULT_LEFT_LABEL
+    if not right_tag.isascii():
+        right_tag = _DEFAULT_RIGHT_LABEL
 
     cap = cv2.VideoCapture(str(path))
     if not cap.isOpened():
@@ -347,19 +290,17 @@ def render_split_screen_video(
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     split_x = int(split_meta.get("split_x_px", int(w * split_meta.get("split_ratio", 0.5))))
 
-    creativity = analysis.get("creativity") or {}
-    total_score = float(creativity.get("score") or 0.0)
-
     ref_by_src = _frames_by_source(ref_raw.get("frames") or [])
     user_by_src = _frames_by_source(user_raw.get("frames") or [])
-
-    # 화면은 항상 좌=기준(ref), 우=비교(user)
-    user_panel = split_meta.get("user_panel", "left")
+    user_panel = str(split_meta.get("user_panel", "left"))
+    ref_panel = str(split_meta.get("reference_panel", "right"))
+    center_crop_ratio: float | None = None
+    if split_meta.get("center_crop_per_panel"):
+        center_crop_ratio = float(split_meta.get("center_crop_ratio") or 0.72)
 
     silent = out.with_suffix(".silent.mp4")
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(silent), fourcc, fps, (w, h))
-    smoother = JointScoreSmoother()
 
     fi = 0
     while True:
@@ -367,109 +308,44 @@ def render_split_screen_video(
         if not ret:
             break
 
-        left_w = split_x
-        right_w = w - split_x
-
-        if user_panel == "left":
-            user_fr = user_by_src.get(fi)
-            ref_fr = ref_by_src.get(fi)
-        else:
-            ref_fr = user_by_src.get(fi)
-            user_fr = ref_by_src.get(fi)
-
-        if ref_fr:
-            _draw_ref_skeleton(
+        def _draw_on_panel(
+            fr: dict[str, Any] | None,
+            panel: str,
+            label: str,
+            color: tuple[int, int, int],
+        ) -> None:
+            if not fr:
+                return
+            x0, y0, pw, ph = _panel_region(panel, split_x, w, h)
+            _draw_skeleton(
                 frame,
-                ref_fr.get("landmarks") or {},
-                0,
-                0,
-                left_w,
-                h,
+                fr.get("landmarks") or {},
+                x0,
+                y0,
+                pw,
+                ph,
+                color,
+                center_crop_ratio=center_crop_ratio,
             )
-            _draw_panel_header(
-                frame,
-                8,
-                8,
-                left_w - 16,
-                left_label,
-                "REFERENCE",
-                accent=_COLOR_REF_JOINT,
-            )
+            _draw_label(frame, x0 + 10, 28, label, color)
 
-        frame_analysis: dict[str, Any] = {}
-        fs = 0.0
-        if ref_fr and user_fr:
-            frame_analysis = analyze_frame_joints(ref_fr, user_fr)
-            joints = smoother.smooth(frame_analysis.get("joints") or [])
-            frame_analysis["joints"] = joints
-            frame_analysis["frame_score"] = round(
-                sum(float(j["creativity_score"]) for j in joints if j.get("creativity_score"))
-                / max(1, sum(1 for j in joints if j.get("creativity_score"))),
-                1,
-            )
-            top = sorted(
-                [j for j in joints if j.get("creativity_score") is not None],
-                key=lambda x: float(x["creativity_score"]),
-                reverse=True,
-            )[:3]
-            frame_analysis["top_joints"] = top
+        user_fr = user_by_src.get(fi)
+        ref_fr = ref_by_src.get(fi)
+        t_sec = _frame_time_sec(user_fr, ref_fr, fi, fps)
+        in_matched = _time_in_matched_intervals(t_sec, matched_intervals)
 
-        if user_fr and frame_analysis:
-            _draw_scored_skeleton(
-                frame,
-                user_fr.get("landmarks") or {},
-                frame_analysis.get("joints") or [],
-                split_x,
-                0,
-                right_w,
-                h,
-            )
-            fs = frame_analysis.get("frame_score", 0)
-            top_txt = ", ".join(
-                f"{t.get('label')}{t.get('creativity_score')}"
-                for t in (frame_analysis.get("top_joints") or [])[:3]
-            )
-            _draw_panel_header(
-                frame,
-                split_x + 8,
-                8,
-                right_w - 16,
-                f"{right_label}  {fs:.0f}점",
-                "관절별 실시간",
-                accent=_COLOR_HIGH if fs >= 62 else _COLOR_MID,
-            )
+        # crop 패널 좌표(0~1) → 해당 물리 패널에 오버레이 (옆 패널에 그리지 않음)
+        for panel, default_color, tag in (
+            ("left", _COLOR_PANEL_LEFT, left_tag),
+            ("right", _COLOR_PANEL_RIGHT, right_tag),
+        ):
+            color = _COLOR_MATCHED if in_matched else default_color
+            if user_panel == panel:
+                _draw_on_panel(user_fr, panel, tag, color)
+            elif ref_panel == panel:
+                _draw_on_panel(ref_fr, panel, tag, color)
 
-        hi_names = [
-            j.get("label")
-            for j in (frame_analysis.get("joints") or [])
-            if j.get("highlight")
-        ]
-        box_y = h - 100
-        _draw_bottom_panel(
-            frame,
-            8,
-            box_y,
-            left_w - 16,
-            [left_label, "기준 포즈"],
-            accent=_COLOR_REF_JOINT,
-        )
-        right_lines = [
-            right_label,
-            f"프레임 {fs:.0f} / 전체 {total_score:.1f}" if user_fr else right_label,
-        ]
-        if hi_names:
-            right_lines.append(f"강조: {', '.join(hi_names[:5])}")
-        _draw_bottom_panel(
-            frame,
-            split_x + 8,
-            box_y,
-            right_w - 16,
-            right_lines,
-            accent=_COLOR_HIGH if hi_names else _COLOR_RIGHT_SKEL,
-        )
-
-        cv2.line(frame, (split_x, 0), (split_x, h), _COLOR_OUTLINE, 5, cv2.LINE_AA)
-        cv2.line(frame, (split_x, 0), (split_x, h), (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.line(frame, (split_x, 0), (split_x, h), _SPLIT_LINE, 1, cv2.LINE_AA)
         writer.write(frame)
         fi += 1
 

@@ -21,7 +21,7 @@ from domain.domain1.hub.services.scoring.alignment import (
 from domain.domain1.hub.services.scoring.rom_scorer import score_rom
 from domain.domain1.hub.services.storage_paths import load_comparison_fields, load_extraction_json
 
-from metrics.creativity.creativity import score_creativity
+from metrics.creativity.service import score_creativity_media_pair_from_extractions
 from metrics.isolation.integration import score_isolation_for_fom
 from metrics.isolation.config import REF_ISOLATION_JSON_FILENAME
 from metrics.isolation.score import score_isolation
@@ -141,10 +141,32 @@ def _run_accuracy(
     )
 
 
-def _run_creativity(aligned_pairs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    if not aligned_pairs:
-        raise ValueError("creativity: 정렬된 프레임 쌍이 없습니다.")
-    return score_creativity(aligned_pairs)
+def _run_creativity(
+    user_extraction: Dict[str, Any],
+    ref_extraction: Dict[str, Any],
+    *,
+    user_json_filename: str,
+    reference_json_filename: str,
+    user_offset_sec: float = 0.0,
+    ref_offset_sec: float = 0.0,
+    auto_detect_start: bool = False,
+    alignment_method: str = "dtw",
+    user_video_path: Optional[str] = None,
+) -> Dict[str, Any]:
+    """두 영상(추출 JSON) — 동작 경계 매칭 창의성 (기본 파이프라인)."""
+    align: str = alignment_method if alignment_method in ("index", "time", "dtw") else "dtw"
+    return score_creativity_media_pair_from_extractions(
+        user_extraction,
+        ref_extraction,
+        user_source=user_json_filename,
+        ref_source=reference_json_filename,
+        user_video_path=user_video_path,
+        user_offset_sec=user_offset_sec,
+        ref_offset_sec=ref_offset_sec,
+        auto_detect_start=auto_detect_start,
+        alignment=align,  # type: ignore[arg-type]
+        analysis_mode="motion",
+    )
 
 
 def _run_isolation(
@@ -268,6 +290,9 @@ async def run_all_scores(
     enabled_metrics: List[str],
     detail_level: str = "summary",
     scoring_mode: str = "dance",
+    alignment_method: str = "time",
+    user_json_filename: str = "user.json",
+    reference_json_filename: str = "reference.json",
     user_offset_sec: float = 0.0,
     ref_offset_sec: float = 0.0,
     auto_detect_start: bool = False,
@@ -297,7 +322,19 @@ async def run_all_scores(
         )
     if "creativity" in enabled_metrics:
         tasks["creativity"] = asyncio.create_task(
-            _run_metric_in_executor(lambda: _run_creativity(aligned_pairs))
+            _run_metric_in_executor(
+                lambda: _run_creativity(
+                    user_extraction,
+                    ref_extraction,
+                    user_json_filename=user_json_filename,
+                    reference_json_filename=reference_json_filename,
+                    user_offset_sec=user_offset_sec,
+                    ref_offset_sec=ref_offset_sec,
+                    auto_detect_start=auto_detect_start,
+                    alignment_method=alignment_method,
+                    user_video_path=user_video_path,
+                )
+            )
         )
     if "isolation" in enabled_metrics:
         tasks["isolation"] = asyncio.create_task(
@@ -433,7 +470,7 @@ async def run_analyze_from_json(
         auto_detect_start=auto_detect_start,
     )
 
-    needs_pairs = bool(set(enabled) & {"accuracy", "creativity"})
+    needs_pairs = "accuracy" in enabled
     if needs_pairs and not aligned_pairs:
         raise ValueError("정렬된 프레임 쌍이 없습니다. 오프셋·영상 길이를 확인하세요.")
 
@@ -449,6 +486,9 @@ async def run_analyze_from_json(
         enabled_metrics=enabled,
         detail_level=detail_level,
         scoring_mode=scoring_mode,
+        alignment_method=alignment_method,
+        user_json_filename=user_json_filename,
+        reference_json_filename=reference_json_filename,
         user_offset_sec=user_offset_sec,
         ref_offset_sec=ref_offset_sec,
         auto_detect_start=auto_detect_start,

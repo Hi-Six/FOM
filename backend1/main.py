@@ -25,7 +25,7 @@ app = FastAPI(
         "통합 API (backend1). "
         "POST /video/analyze — 유저 영상 업로드 + 레퍼런스 JSON 채점. "
         "POST /video/analyze/json — 저장 JSON 2개, 6 metric 병렬 채점. "
-        "POST /creativity/analyze — 창의성 전체 파이프라인(음악 구간·50프레임·DTW). "
+        "POST /creativity/analyze — 두 영상 창의성(동작 경계 매칭, 기본). "
         "POST /video/extract — ROM domain1 추출. "
         "rhythm 채점 — POST /video/analyze (metrics/rhythm scorer, /rhythm/* 비활성)."
     ),

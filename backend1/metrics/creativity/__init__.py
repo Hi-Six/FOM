@@ -6,8 +6,13 @@ from .creativity import score_creativity
 from .extract import extract_from_image, extract_from_media, extract_from_video, save_extraction
 from .music_align import align_music_segment, resolve_music_offsets
 from .llm_creativity import apply_llm_hybrid_to_creativity
+from .dual_analysis import analyze_dual_creativity
 from .segment_detect import detect_motion_unit_segments, detect_ref_segments
-from .service import analyze_extraction_pair, analyze_media_pair
+from .service import (
+    analyze_extraction_pair,
+    analyze_media_pair,
+    score_creativity_media_pair_from_extractions,
+)
 from .split_screen_service import analyze_split_screen_video
 from .preprocess import (
     detect_dance_start,
@@ -33,8 +38,10 @@ __all__ = [
     "resolve_music_offsets",
     "analyze_media_pair",
     "analyze_extraction_pair",
+    "score_creativity_media_pair_from_extractions",
     "analyze_split_screen_video",
     "apply_llm_hybrid_to_creativity",
     "detect_ref_segments",
     "detect_motion_unit_segments",
+    "analyze_dual_creativity",
 ]
